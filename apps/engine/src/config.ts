@@ -49,7 +49,9 @@ export interface EngineConfig {
 export function loadConfig(): EngineConfig {
   return {
     mode: (str('TRADING_MODE', 'paper') as TradingMode),
-    port: num('ENGINE_PORT', 4000),
+    // Railway / most PaaS platforms inject PORT. Honor it first, fall back to
+    // ENGINE_PORT for local dev where 4000 keeps API/dashboard ports distinct.
+    port: num('PORT', num('ENGINE_PORT', 4000)),
     host: str('ENGINE_HOST', '0.0.0.0'),
     databaseUrl: str('DATABASE_URL', ''),
     startingEquityUsd: num('STARTING_EQUITY_USD', 10_000),
