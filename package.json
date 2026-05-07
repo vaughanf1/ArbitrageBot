@@ -1,0 +1,25 @@
+{
+  "name": "cesar-arb",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-venue arbitrage bot for Cesar — crypto (BitGet) + prediction markets (Polymarket / Kalshi)",
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:engine": "pnpm --filter @cesar-arb/engine dev",
+    "dev:dashboard": "pnpm --filter @cesar-arb/dashboard dev",
+    "build": "pnpm -r build",
+    "setup": "pnpm --filter @cesar-arb/setup-bot start",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/node": "^22.7.5",
+    "tsx": "^4.19.1"
+  }
+}

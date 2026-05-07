@@ -1,0 +1,23 @@
+# Railway deployment config — one service per app.
+#
+# In the Railway dashboard, create two services from this repo:
+#
+#   1) engine    → Root directory: apps/engine
+#                  Build:  pnpm install --frozen-lockfile && pnpm --filter @cesar-arb/engine build
+#                  Start:  pnpm --filter @cesar-arb/engine start
+#                  Volume: mount at /data, set SQLITE_PATH=/data/cesar-arb.db
+#
+#   2) dashboard → Root directory: apps/dashboard
+#                  Build:  pnpm install --frozen-lockfile && pnpm --filter @cesar-arb/dashboard build
+#                  Start:  pnpm --filter @cesar-arb/dashboard start
+#                  Env:    NEXT_PUBLIC_ENGINE_URL=https://<engine service domain>
+#
+# The Postgres add-on is optional for v1 — SQLite on a 1GB volume is plenty
+# for paper-trading. Switch to Postgres when going live for multi-instance HA.
+
+[build]
+builder = "nixpacks"
+
+[deploy]
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply bg-bg text-ink font-sans;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-bg-card rounded-card shadow-card p-6;
+  }
+  .stat-value {
+    @apply text-3xl font-semibold tracking-tight;
+  }
+  .stat-label {
+    @apply text-xs uppercase tracking-wider text-ink-muted;
+  }
+  .pill {
+    @apply inline-flex items-center rounded-pill px-3 py-1 text-xs font-medium;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center rounded-pill px-4 py-2 text-sm font-medium transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:opacity-90;
+  }
+  .btn-ghost {
+    @apply btn text-ink-muted hover:bg-black/5;
+  }
+}

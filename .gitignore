@@ -1,0 +1,37 @@
+node_modules/
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+
+.env
+.env.local
+.env.*.local
+
+*.db
+*.sqlite
+*.sqlite-journal
+data/
+
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+coverage/
+
+.playwright-mcp/
+*.png
+
+# tsc emits build artifacts in-place under src/ for some packages — keep them out.
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map
+apps/*/src/**/*.js
+apps/*/src/**/*.js.map
+apps/*/src/**/*.d.ts
+apps/*/src/**/*.d.ts.map
+# But Next.js needs this auto-generated file at the dashboard root.
+!apps/dashboard/next-env.d.ts
+

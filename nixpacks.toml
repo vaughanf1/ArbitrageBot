@@ -1,0 +1,11 @@
+# Nixpacks build settings for Railway.
+# pnpm + Node 20 + native build tools for better-sqlite3.
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "pnpm-9_x", "python3", "gcc", "gnumake"]
+
+[phases.install]
+cmds = ["pnpm install --frozen-lockfile"]
+
+[phases.build]
+cmds = ["pnpm -r build"]
