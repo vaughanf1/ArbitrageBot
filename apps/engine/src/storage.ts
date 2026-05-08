@@ -33,7 +33,6 @@ export class Storage {
         tradable INTEGER NOT NULL DEFAULT 1
       );
       CREATE INDEX IF NOT EXISTS idx_opp_detected ON opportunities(detected_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_opp_tradable_detected ON opportunities(tradable, detected_at DESC);
 
       CREATE TABLE IF NOT EXISTS trades (
         id TEXT PRIMARY KEY,
@@ -62,11 +61,13 @@ export class Storage {
     `);
     // Add `tradable` column to legacy DBs that pre-date the candidate feed.
     // Existing rows are assumed tradable=1 (the column default).
+    // Must run BEFORE the tradable-aware index, otherwise CREATE INDEX
+    // references a column that doesn't exist on legacy schemas.
     const cols = this.db.prepare(`PRAGMA table_info(opportunities)`).all() as Array<{ name: string }>;
     if (!cols.some((c) => c.name === 'tradable')) {
       this.db.exec(`ALTER TABLE opportunities ADD COLUMN tradable INTEGER NOT NULL DEFAULT 1`);
-      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_opp_tradable_detected ON opportunities(tradable, detected_at DESC)`);
     }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_opp_tradable_detected ON opportunities(tradable, detected_at DESC)`);
   }
 
   recordOpportunity(o: Opportunity, tradable: boolean = true): void {
