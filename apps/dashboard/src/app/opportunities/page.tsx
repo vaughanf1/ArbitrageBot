@@ -8,15 +8,17 @@ import { fmtUsd, fmtPct, fmtAge } from '@/lib/format';
 export default function OpportunitiesPage() {
   const [live, setLive] = useState<Opportunity[]>([]);
   const [recent, setRecent] = useState<Opportunity[]>([]);
+  const [candidates, setCandidates] = useState<Opportunity[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     async function tick() {
       try {
-        const o = await api.opportunities();
+        const [opps, cands] = await Promise.all([api.opportunities(), api.candidates()]);
         if (!cancelled) {
-          setLive(o.live);
-          setRecent(o.recent);
+          setLive(opps.live);
+          setRecent(opps.recent);
+          setCandidates(cands.recent);
         }
       } catch {
         /* ignore */
@@ -35,16 +37,27 @@ export default function OpportunitiesPage() {
       <h1 className="text-h1">Opportunities</h1>
 
       <section className="card">
-        <h2 className="mb-3 text-lg font-semibold">Live ({live.length})</h2>
+        <h2 className="mb-3 text-lg font-semibold">Tradable now ({live.length})</h2>
         {live.length === 0 ? (
-          <p className="text-sm text-ink-muted">No live opportunities right now.</p>
+          <p className="text-sm text-ink-muted">
+            No opportunities clearing the spread threshold right now. The scan feed below
+            shows everything the engine is evaluating, including sub-threshold edges.
+          </p>
         ) : (
           <OppTable opps={live} live />
         )}
       </section>
 
       <section className="card">
-        <h2 className="mb-3 text-lg font-semibold">Recent history</h2>
+        <h2 className="mb-3 text-lg font-semibold">Live scan feed ({candidates.length})</h2>
+        <p className="mb-3 text-xs text-ink-muted">
+          All evaluated candidates from the last few scans — including those below the spread threshold.
+        </p>
+        <OppTable opps={candidates.slice(0, 100)} />
+      </section>
+
+      <section className="card">
+        <h2 className="mb-3 text-lg font-semibold">Tradable history</h2>
         <OppTable opps={recent.slice(0, 50)} />
       </section>
     </div>

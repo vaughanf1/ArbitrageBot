@@ -29,9 +29,11 @@ export class Storage {
         venues TEXT NOT NULL,
         legs_json TEXT NOT NULL,
         detected_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
+        expires_at INTEGER NOT NULL,
+        tradable INTEGER NOT NULL DEFAULT 1
       );
       CREATE INDEX IF NOT EXISTS idx_opp_detected ON opportunities(detected_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_opp_tradable_detected ON opportunities(tradable, detected_at DESC);
 
       CREATE TABLE IF NOT EXISTS trades (
         id TEXT PRIMARY KEY,
@@ -58,14 +60,21 @@ export class Storage {
         kill_switch INTEGER NOT NULL
       );
     `);
+    // Add `tradable` column to legacy DBs that pre-date the candidate feed.
+    // Existing rows are assumed tradable=1 (the column default).
+    const cols = this.db.prepare(`PRAGMA table_info(opportunities)`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'tradable')) {
+      this.db.exec(`ALTER TABLE opportunities ADD COLUMN tradable INTEGER NOT NULL DEFAULT 1`);
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_opp_tradable_detected ON opportunities(tradable, detected_at DESC)`);
+    }
   }
 
-  recordOpportunity(o: Opportunity): void {
+  recordOpportunity(o: Opportunity, tradable: boolean = true): void {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO opportunities
-         (id, strategy, asset_class, edge_pct, size_usd, est_profit_usd, description, reasoning, venues, legs_json, detected_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, strategy, asset_class, edge_pct, size_usd, est_profit_usd, description, reasoning, venues, legs_json, detected_at, expires_at, tradable)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         o.id,
@@ -80,10 +89,18 @@ export class Storage {
         JSON.stringify(o.legs),
         o.detectedAt,
         o.expiresAt,
+        tradable ? 1 : 0,
       );
   }
 
   recentOpportunities(limit = 50): Opportunity[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM opportunities WHERE tradable = 1 ORDER BY detected_at DESC LIMIT ?`)
+      .all(limit) as OpportunityRow[];
+    return rows.map(rowToOpportunity);
+  }
+
+  recentCandidates(limit = 100): Opportunity[] {
     const rows = this.db
       .prepare(`SELECT * FROM opportunities ORDER BY detected_at DESC LIMIT ?`)
       .all(limit) as OpportunityRow[];

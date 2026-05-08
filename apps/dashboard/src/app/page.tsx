@@ -3,11 +3,12 @@
 import { useEffect, useState } from 'react';
 import type { EngineStatus, Opportunity, Trade } from '@cesar-arb/shared';
 import { api } from '@/lib/api';
-import { fmtUsd, fmtPct, fmtTime } from '@/lib/format';
+import { fmtUsd, fmtPct, fmtTime, fmtAge, fmtCount } from '@/lib/format';
 
 export default function OverviewPage() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [opps, setOpps] = useState<Opportunity[]>([]);
+  const [candidates, setCandidates] = useState<Opportunity[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,14 +16,16 @@ export default function OverviewPage() {
     let cancelled = false;
     async function tick() {
       try {
-        const [s, o, t] = await Promise.all([
+        const [s, o, c, t] = await Promise.all([
           api.status(),
           api.opportunities(),
+          api.candidates(),
           api.trades(20),
         ]);
         if (cancelled) return;
         setStatus(s);
         setOpps(o.live);
+        setCandidates(c.recent);
         setTrades(t.trades);
         setError(null);
       } catch (e) {
@@ -91,13 +94,29 @@ export default function OverviewPage() {
         <Stat
           label="Trades"
           value={status ? String(status.tradedCount) : '—'}
-          sub={status ? `${status.scannedCount} scanned` : undefined}
+          sub={status ? `${status.scannedCount} tradable / ${status.candidateCount} scanned` : undefined}
         />
         <Stat
           label="Min spread"
           value={status ? fmtPct(status.limits.minSpreadPct) : '—'}
           sub={status ? `trail ${status.limits.trailingStopPct}%` : undefined}
         />
+      </section>
+
+      <section className="card">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Markets monitored</h2>
+          <span className="text-xs text-ink-muted">
+            {status?.lastScanAt
+              ? `last scan ${fmtAge(status.lastScanAt)} · ${status.lastScanMs}ms`
+              : 'waiting for first scan…'}
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <VenueStat label="BitGet pairs" count={status?.marketCounts.bitget ?? 0} />
+          <VenueStat label="Polymarket markets" count={status?.marketCounts.polymarket ?? 0} />
+          <VenueStat label="Kalshi markets" count={status?.marketCounts.kalshi ?? 0} />
+        </div>
       </section>
 
       <section className="card">
@@ -129,6 +148,47 @@ export default function OverviewPage() {
                 </div>
               </li>
             ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="card">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Live scan feed</h2>
+          <span className="text-xs text-ink-muted">
+            {candidates.length} candidate{candidates.length === 1 ? '' : 's'} · sub-threshold included
+          </span>
+        </div>
+        {candidates.length === 0 ? (
+          <p className="text-sm text-ink-muted">
+            No candidates yet — first scan in progress.
+          </p>
+        ) : (
+          <ul className="divide-y divide-black/5">
+            {candidates.slice(0, 12).map((c) => {
+              const tradable = status ? c.edgePct >= status.limits.minSpreadPct : false;
+              return (
+                <li key={c.id} className="grid grid-cols-12 items-center gap-3 py-2">
+                  <div className="col-span-12 md:col-span-7">
+                    <div className="text-sm font-medium">{c.description}</div>
+                    <div className="text-xs text-ink-muted">{c.venues.join(' + ')} · {fmtAge(c.detectedAt)}</div>
+                  </div>
+                  <div className="col-span-4 md:col-span-2">
+                    <span className="pill bg-black/5 text-ink-muted">{c.strategy}</span>
+                  </div>
+                  <div className={`col-span-4 md:col-span-1 text-right text-sm font-medium ${c.edgePct >= 0 ? 'text-accent' : 'text-ink-muted'}`}>
+                    {fmtPct(c.edgePct)}
+                  </div>
+                  <div className="col-span-4 md:col-span-2 text-right">
+                    {tradable ? (
+                      <span className="pill bg-accent-dim text-accent">tradable</span>
+                    ) : (
+                      <span className="pill bg-black/5 text-ink-subtle">below {fmtPct(status?.limits.minSpreadPct ?? 0)}</span>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -183,6 +243,15 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
         {value}
       </div>
       {sub && <div className="mt-1 text-xs text-ink-muted">{sub}</div>}
+    </div>
+  );
+}
+
+function VenueStat({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="rounded-lg bg-black/[0.02] px-4 py-3">
+      <div className="text-xs uppercase tracking-wider text-ink-muted">{label}</div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums">{fmtCount(count)}</div>
     </div>
   );
 }

@@ -80,7 +80,12 @@ export class PredictionScanner implements Scanner {
     this.minEdgePct = opts.minEdgePct;
     this.sizeUsd = opts.sizeUsd;
     this.minVolume24h = opts.minVolume24h ?? 1_000;
-    this.minSimilarity = opts.minSimilarity ?? 0.75;
+    // 0.55 is calibrated against live Poly + Kalshi titles: tight enough to
+    // exclude template-only matches ("Will X win Y" without a shared specific
+    // entity) but loose enough to pair Bitcoin same-strike markets where the
+    // titles use different phrasing. Combined with the entity-contradiction
+    // and price-floor guards, this surfaces real candidates without spam.
+    this.minSimilarity = opts.minSimilarity ?? 0.55;
     this.ttlMs = opts.ttlMs ?? 30_000;
     this.feeBps = opts.feeBps ?? 50;
     this.matchMode = opts.matchMode ?? 'allowlist';
@@ -188,6 +193,17 @@ export class PredictionScanner implements Scanner {
     const kalshiYesAsk = k.yesAsk;
     const kalshiNoAsk = k.noAsk;
 
+    // Liquidity guard: prices below MIN_LEG_PRICE are almost always thin-book
+    // artefacts (a market with no real ask quotes shows ask=$0.01 or similar).
+    // The math says "free money" against the other side, but at retail size you
+    // never actually fill. Skip the pair entirely if any leg is too cheap.
+    if (
+      polyYesAsk < MIN_LEG_PRICE || polyNoAsk < MIN_LEG_PRICE ||
+      kalshiYesAsk < MIN_LEG_PRICE || kalshiNoAsk < MIN_LEG_PRICE
+    ) {
+      return null;
+    }
+
     // Build A: YES on Polymarket + NO on Kalshi
     const costA = polyYesAsk + kalshiNoAsk;
     // Build B: NO on Polymarket + YES on Kalshi
@@ -198,10 +214,9 @@ export class PredictionScanner implements Scanner {
 
     const usingA = buildAEdge >= buildBEdge;
     const edgePct = usingA ? buildAEdge : buildBEdge;
-    if (edgePct < this.minEdgePct) return null;
-
     const cost = usingA ? costA : costB;
-    if (cost <= 0 || cost >= 1) return null;
+    // Skip degenerate prices that can't form a valid pair.
+    if (cost <= 0) return null;
 
     const polySide = usingA ? 'YES' : 'NO';
     const kalshiSide = usingA ? 'NO' : 'YES';
@@ -258,6 +273,12 @@ export class PredictionScanner implements Scanner {
   }
 }
 
+// Below this price a "leg" is considered illiquid noise (a market quoted
+// essentially flat to zero or one — typical of dead Kalshi books). Excluding
+// these prevents the scanner from manufacturing fake 1000%+ edges out of
+// thin-book artefacts.
+const MIN_LEG_PRICE = 0.03;
+
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'be', 'will', 'is', 'are', 'on', 'at', 'in', 'of', 'to',
   'for', 'by', 'with', 'and', 'or', 'this', 'that', 'it', 'its', 'as',
@@ -294,22 +315,29 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 }
 
 /**
- * Extract specific named entities — capitalized words ≥ 3 chars and 4-digit
- * years — that distinguish one event from another. Excludes generic
- * event-template words ("election", "primary", etc.) and stopwords.
+ * Extract specific named entities that distinguish one event from another:
+ *   - capitalized words ≥ 3 chars (proper nouns)
+ *   - 4-digit years
+ *   - any multi-digit numeric token (strike prices, thresholds)
  *
- * Returned tokens are lowercased to make comparison case-insensitive.
+ * Excludes generic event-template words ("election", "primary", etc.) and
+ * stopwords. Multi-digit numerics matter because two BTC markets like
+ * "above $84,000" and "above $80,000" tokenise into {84,000} vs {80,000};
+ * without numeric entities the matcher treats them as identical and
+ * produces fake giant edges across different strike prices.
+ *
+ * Returned tokens are lowercased.
  */
 function namedEntities(s: string): Set<string> {
   const out = new Set<string>();
   const words = s.split(/[^A-Za-z0-9]+/).filter(Boolean);
   for (const w of words) {
-    if (/^\d{4}$/.test(w)) {
-      out.add(w);
+    if (/^\d+$/.test(w)) {
+      // Any number of 2+ digits is a distinguishing entity (year, strike, etc).
+      if (w.length >= 2) out.add(w);
       continue;
     }
     if (w.length < 3) continue;
-    // Capitalized word — likely a proper noun.
     if (/^[A-Z]/.test(w)) {
       const lower = w.toLowerCase();
       if (STOPWORDS.has(lower)) continue;

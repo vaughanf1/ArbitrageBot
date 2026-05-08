@@ -112,8 +112,10 @@ export interface EngineStatus {
   running: boolean;
   killSwitch: boolean;
   startedAt: number | null;
-  /** Number of opportunities scanned in current session. */
+  /** Number of tradable opportunities (above min-spread) seen this session. */
   scannedCount: number;
+  /** Total candidates evaluated this session — includes sub-threshold edges. */
+  candidateCount: number;
   /** Number of trades attempted in current session. */
   tradedCount: number;
   /** Today's realized P&L in USD. */
@@ -121,6 +123,12 @@ export interface EngineStatus {
   /** Today's deployed exposure in USD. */
   exposureTodayUsd: number;
   limits: RiskLimits;
+  /** Unix ms of last completed scan. Null until first scan finishes. */
+  lastScanAt: number | null;
+  /** Wall-clock ms of last scan loop. */
+  lastScanMs: number;
+  /** Markets currently being monitored by venue. */
+  marketCounts: { bitget: number; polymarket: number; kalshi: number };
 }
 
 export interface DailyReport {

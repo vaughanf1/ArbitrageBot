@@ -28,6 +28,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 export const api = {
   status: () => get<EngineStatus>('/api/status'),
   opportunities: () => get<{ live: Opportunity[]; recent: Opportunity[] }>('/api/opportunities'),
+  candidates: () => get<{ live: Opportunity[]; recent: Opportunity[] }>('/api/candidates'),
   trades: (limit = 100) => get<{ trades: Trade[] }>(`/api/trades?limit=${limit}`),
   report: (date?: string) => get<DailyReport>(`/api/report${date ? `?date=${date}` : ''}`),
   setKillSwitch: (active: boolean) => post<{ ok: boolean; killSwitch: boolean }>('/api/kill-switch', { active }),

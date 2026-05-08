@@ -21,3 +21,9 @@ export function fmtAge(ts: number, now = Date.now()): string {
   const h = Math.floor(m / 60);
   return `${h}h ago`;
 }
+
+export function fmtCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}

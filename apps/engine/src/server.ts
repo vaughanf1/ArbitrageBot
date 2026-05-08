@@ -24,6 +24,12 @@ export async function createServer(opts: {
     return { live, recent };
   });
 
+  fastify.get('/api/candidates', async () => {
+    const live = opts.engine.liveCandidates();
+    const recent = opts.storage.recentCandidates(100);
+    return { live, recent };
+  });
+
   fastify.get('/api/trades', async (req) => {
     const limit = Number((req.query as { limit?: string }).limit ?? '100');
     return { trades: opts.storage.recentTrades(isFinite(limit) ? limit : 100) };

@@ -95,16 +95,10 @@ export class TriangularScanner implements Scanner {
       const c = bySymbol.get(tri.pairs.midOther);
       if (!a || !b || !c || !validTicker(a) || !validTicker(b) || !validTicker(c)) continue;
 
-      // Direction A: quote → mid → other → quote
       const dirA = simulateDirA(tri, a, b, c, this.sizeUsd, this.feeBps);
-      if (dirA && dirA.edgePct >= this.minEdgePct) {
-        out.push(this.buildOpportunity(tri, dirA, 'A'));
-      }
-      // Direction B: quote → other → mid → quote
+      if (dirA) out.push(this.buildOpportunity(tri, dirA, 'A'));
       const dirB = simulateDirB(tri, a, b, c, this.sizeUsd, this.feeBps);
-      if (dirB && dirB.edgePct >= this.minEdgePct) {
-        out.push(this.buildOpportunity(tri, dirB, 'B'));
-      }
+      if (dirB) out.push(this.buildOpportunity(tri, dirB, 'B'));
     }
     return out;
   }

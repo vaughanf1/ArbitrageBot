@@ -61,6 +61,23 @@ interface KalshiEventsResponse {
 
 const SKIP_CATEGORIES = new Set(['Sports']);
 
+// High-volume Kalshi crypto series whose resolution windows commonly overlap
+// Polymarket BTC/ETH product. The default /events feed never returns Crypto
+// category events, so we have to enumerate these explicitly.
+const CRYPTO_SERIES = [
+  'KXBTCD',   // Bitcoin price daily strikes (5pm EDT settle)
+  'KXBTC',    // Bitcoin price (multiple timeframes)
+  'KXBTCY',   // Bitcoin yearly
+  'KXBTCMAXY', // Bitcoin max for year
+  'KXBTCMINY', // Bitcoin min for year
+  'KXETH',    // Ethereum price
+  'KXETHD',   // Ethereum daily
+  'KXSOL',    // Solana price
+  'KXSOLD',   // Solana daily
+  'KXXRP',    // XRP price
+  'KXXRPD',   // XRP daily
+];
+
 /**
  * Read-only Kalshi executor.
  *
@@ -94,6 +111,13 @@ export class KalshiExecutor implements Executor {
     // Use the /events endpoint with nested markets — that returns the binary
     // political/event markets that overlap Polymarket. The flat /markets feed
     // is dominated by multi-leg sports parlays we don't want.
+    //
+    // Kalshi's /events endpoint silently ignores the `category` query param,
+    // so the default listing is dominated by Politics/Elections and never
+    // surfaces Crypto events. To get crypto markets we explicitly pull a
+    // few high-volume series tickers that overlap with Polymarket's BTC/ETH
+    // products — those are the only pairs likely to share resolution.
+    const seen = new Set<string>();
     const out: KalshiMarket[] = [];
     let cursor: string | undefined;
     for (let page = 0; page < maxPages; page++) {
@@ -110,13 +134,47 @@ export class KalshiExecutor implements Executor {
         if (e.category && SKIP_CATEGORIES.has(e.category)) continue;
         const eventTitle = e.title ?? '';
         for (const r of e.markets ?? []) {
+          if (seen.has(r.ticker)) continue;
           const parsed = parseKalshiRow(r, eventTitle);
-          if (parsed) out.push(parsed);
+          if (parsed) {
+            seen.add(r.ticker);
+            out.push(parsed);
+          }
         }
       }
       if (!json.cursor) break;
       cursor = json.cursor;
     }
+
+    // Crypto/financial top-up: Kalshi's default events feed never returns
+    // Crypto category events, so explicitly fetch the major series.
+    for (const seriesTicker of CRYPTO_SERIES) {
+      try {
+        const params = new URLSearchParams({
+          status: 'open',
+          limit: '100',
+          with_nested_markets: 'true',
+          series_ticker: seriesTicker,
+        });
+        const res = await fetch(`${KALSHI_BASE}/events?${params.toString()}`);
+        if (!res.ok) continue;
+        const json = (await res.json()) as KalshiEventsResponse;
+        for (const e of json.events ?? []) {
+          const eventTitle = e.title ?? '';
+          for (const r of e.markets ?? []) {
+            if (seen.has(r.ticker)) continue;
+            const parsed = parseKalshiRow(r, eventTitle);
+            if (parsed) {
+              seen.add(r.ticker);
+              out.push(parsed);
+            }
+          }
+        }
+      } catch {
+        // best-effort enrichment; ignore series-level failures
+      }
+    }
+
     this.marketsCache = { markets: out, cachedAt: Date.now() };
     return out;
   }

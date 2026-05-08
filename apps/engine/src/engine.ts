@@ -15,6 +15,7 @@ import {
 import {
   PredictionScanner,
   TriangularScanner,
+  DEFAULT_TRIANGLES,
   type Scanner,
 } from '@cesar-arb/scanners';
 import { freshState, maybeResetForNewDay, RiskGuard, ymdUtc } from '@cesar-arb/risk';
@@ -52,7 +53,11 @@ export class Engine {
   private killSwitch = false;
   private startedAt: number | null = null;
   private scannedCount = 0;
+  private candidateCount = 0;
   private tradedCount = 0;
+  private lastScanAt: number | null = null;
+  private lastScanMs = 0;
+  private marketCounts = { bitget: 0, polymarket: 0, kalshi: 0 };
 
   private bitget!: BitgetExecutor;
   private polymarket!: PolymarketExecutor;
@@ -68,6 +73,7 @@ export class Engine {
   private state: ReturnType<typeof freshState>;
 
   private currentOpportunities: Opportunity[] = [];
+  private currentCandidates: Opportunity[] = [];
   private loopHandle: NodeJS.Timeout | null = null;
 
   constructor(deps: EngineDeps) {
@@ -171,10 +177,14 @@ export class Engine {
       killSwitch: this.killSwitch,
       startedAt: this.startedAt,
       scannedCount: this.scannedCount,
+      candidateCount: this.candidateCount,
       tradedCount: this.tradedCount,
       realizedPnlTodayUsd: this.state.realizedPnlTodayUsd,
       exposureTodayUsd: this.state.exposureTodayUsd,
       limits: this.config.limits,
+      lastScanAt: this.lastScanAt,
+      lastScanMs: this.lastScanMs,
+      marketCounts: this.marketCounts,
     };
   }
 
@@ -183,27 +193,44 @@ export class Engine {
     return this.currentOpportunities.filter((o) => o.expiresAt > now);
   }
 
+  liveCandidates(): Opportunity[] {
+    const now = Date.now();
+    return this.currentCandidates.filter((o) => o.expiresAt > now);
+  }
+
   private async tick(): Promise<void> {
+    const tickStart = Date.now();
     try {
       this.state = maybeResetForNewDay(this.state, this.config.startingEquityUsd);
       this.state.killSwitch = this.killSwitch;
 
-      const found: Opportunity[] = [];
+      const candidates: Opportunity[] = [];
       for (const scanner of this.scanners) {
         try {
           const opps = await scanner.scan();
-          for (const o of opps) {
-            this.storage.recordOpportunity(o);
-            found.push(o);
-          }
+          for (const o of opps) candidates.push(o);
         } catch (err) {
           this.logger.warn({ err: (err as Error).message, scanner: scanner.name }, 'scanner failed');
         }
       }
-      this.scannedCount += found.length;
-      this.currentOpportunities = found.sort((a, b) => b.edgePct - a.edgePct);
 
-      // Try to execute the best opportunity (if any).
+      const minEdge = this.config.limits.minSpreadPct;
+      const tradable = candidates.filter((o) => o.edgePct >= minEdge);
+      candidates.sort((a, b) => b.edgePct - a.edgePct);
+      tradable.sort((a, b) => b.edgePct - a.edgePct);
+
+      for (const o of candidates) {
+        this.storage.recordOpportunity(o, o.edgePct >= minEdge);
+      }
+
+      this.candidateCount += candidates.length;
+      this.scannedCount += tradable.length;
+      this.currentCandidates = candidates;
+      this.currentOpportunities = tradable;
+
+      await this.refreshMarketCounts();
+
+      // Try to execute the best tradable opportunity (if any).
       for (const opp of this.currentOpportunities) {
         const decision = this.guard.evaluate(opp, this.state);
         if (!decision.allowed) {
@@ -217,11 +244,38 @@ export class Engine {
     } catch (err) {
       this.logger.error({ err: (err as Error).message }, 'tick failed');
     } finally {
+      this.lastScanAt = Date.now();
+      this.lastScanMs = this.lastScanAt - tickStart;
       if (this.running) {
         // Triangular needs fast cycling; prediction can be slower. Use a moderate cadence.
         this.loopHandle = setTimeout(() => this.tick().catch((e) => this.logger.error(e)), 5_000);
       }
     }
+  }
+
+  /**
+   * Pull live counts from each venue. Executors cache for 30s so this is
+   * effectively free after the first tick — but it lets the dashboard
+   * prove that real market data is flowing in even when no edge clears
+   * the threshold.
+   */
+  private async refreshMarketCounts(): Promise<void> {
+    const triangleSymbols = new Set<string>();
+    for (const t of DEFAULT_TRIANGLES) {
+      triangleSymbols.add(t.pairs.quoteMid);
+      triangleSymbols.add(t.pairs.quoteOther);
+      triangleSymbols.add(t.pairs.midOther);
+    }
+    const [bitgetTickers, polyMarkets, kalshiMarkets] = await Promise.allSettled([
+      this.bitget.tickers([...triangleSymbols]),
+      this.polymarket.listActiveMarkets(),
+      this.kalshi.listActiveMarkets(),
+    ]);
+    this.marketCounts = {
+      bitget: bitgetTickers.status === 'fulfilled' ? bitgetTickers.value.length : this.marketCounts.bitget,
+      polymarket: polyMarkets.status === 'fulfilled' ? polyMarkets.value.length : this.marketCounts.polymarket,
+      kalshi: kalshiMarkets.status === 'fulfilled' ? kalshiMarkets.value.length : this.marketCounts.kalshi,
+    };
   }
 
   private async executeOpportunity(opp: Opportunity): Promise<void> {

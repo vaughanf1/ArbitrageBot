@@ -2,7 +2,13 @@ import type { Opportunity } from '@cesar-arb/shared';
 
 export interface Scanner {
   name: string;
-  /** Run one scan pass and return any opportunities meeting the spread threshold. */
+  /**
+   * Run one scan pass and return ALL evaluated candidates — including
+   * sub-threshold edges. The engine filters tradable vs candidate using
+   * its risk-limit threshold; surfacing everything keeps the dashboard
+   * alive when no edge clears the bar (which is the common case in
+   * efficient markets).
+   */
   scan(): Promise<Opportunity[]>;
 }
 

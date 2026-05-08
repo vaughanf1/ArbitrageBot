@@ -35,3 +35,6 @@ apps/*/src/**/*.d.ts.map
 # But Next.js needs this auto-generated file at the dashboard root.
 !apps/dashboard/next-env.d.ts
 
+# Local handoff scratch — not for clients.
+HANDOFF.md
+
