@@ -19,6 +19,7 @@ import {
   type Scanner,
 } from '@cesar-arb/scanners';
 import { freshState, maybeResetForNewDay, RiskGuard, ymdUtc } from '@cesar-arb/risk';
+import { buildDailyReport, sendDailyReportEmail } from '@cesar-arb/reporting';
 import type { EngineConfig } from './config.js';
 import type { Storage } from './storage.js';
 import type { Logger } from 'pino';
@@ -86,6 +87,8 @@ export class Engine {
    */
   private recentFires: Map<string, number> = new Map();
   private readonly DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+
+  private reportHandle: NodeJS.Timeout | null = null;
 
   constructor(deps: EngineDeps) {
     this.config = deps.config;
@@ -165,13 +168,55 @@ export class Engine {
     this.startedAt = Date.now();
     this.logger.info({ mode: this.mode }, 'engine started');
     this.loopHandle = setTimeout(() => this.tick().catch((e) => this.logger.error(e)), 0);
+    this.scheduleNextDailyReport();
   }
 
   async stop(): Promise<void> {
     this.running = false;
     if (this.loopHandle) clearTimeout(this.loopHandle);
     this.loopHandle = null;
+    if (this.reportHandle) clearTimeout(this.reportHandle);
+    this.reportHandle = null;
     this.logger.info('engine stopped');
+  }
+
+  /**
+   * Schedule the daily report send for 23:55 UTC. We fire just before
+   * midnight (rather than at midnight) so that all of today's trades are
+   * included before the daily state resets at 00:00 UTC. If the email
+   * config isn't set, the send is a no-op — the function will log that
+   * and re-arm itself for the next day.
+   */
+  private scheduleNextDailyReport(): void {
+    const now = new Date();
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 55, 0));
+    if (next.getTime() <= now.getTime()) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+    const delayMs = next.getTime() - now.getTime();
+    this.logger.info({ nextReportAt: next.toISOString(), delayMs }, 'scheduled daily report');
+    this.reportHandle = setTimeout(() => {
+      this.sendDailyReport().catch((e) => this.logger.error({ err: (e as Error).message }, 'daily report failed'));
+      // Always re-arm even if this fire failed.
+      if (this.running) this.scheduleNextDailyReport();
+    }, delayMs);
+  }
+
+  private async sendDailyReport(): Promise<void> {
+    const date = ymdUtc(new Date());
+    const trades = this.storage.tradesForDate(date);
+    const report = buildDailyReport(date, trades);
+    const result = await sendDailyReportEmail({
+      report,
+      resendKey: this.config.report.resendKey,
+      from: this.config.report.from,
+      to: this.config.report.to,
+    });
+    if (result.sent) {
+      this.logger.info({ date, trades: trades.length, emailId: result.id }, 'daily report sent');
+    } else {
+      this.logger.warn({ date, reason: result.reason }, 'daily report not sent');
+    }
   }
 
   setKillSwitch(active: boolean): void {
@@ -207,6 +252,24 @@ export class Engine {
   liveCandidates(): Opportunity[] {
     const now = Date.now();
     return this.currentCandidates.filter((o) => o.expiresAt > now);
+  }
+
+  /**
+   * Manually trigger the daily report send. Used to verify Resend wiring
+   * end-to-end without waiting for 23:55 UTC.
+   */
+  async triggerDailyReport(): Promise<{ sent: boolean; reason?: string }> {
+    const date = ymdUtc(new Date());
+    const trades = this.storage.tradesForDate(date);
+    const report = buildDailyReport(date, trades);
+    const r = await sendDailyReportEmail({
+      report,
+      resendKey: this.config.report.resendKey,
+      from: this.config.report.from,
+      to: this.config.report.to,
+    });
+    if (r.sent) return { sent: true };
+    return { sent: false, reason: r.reason };
   }
 
   /**

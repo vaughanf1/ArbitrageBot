@@ -193,17 +193,6 @@ export class PredictionScanner implements Scanner {
     const kalshiYesAsk = k.yesAsk;
     const kalshiNoAsk = k.noAsk;
 
-    // Liquidity guard: prices below MIN_LEG_PRICE are almost always thin-book
-    // artefacts (a market with no real ask quotes shows ask=$0.01 or similar).
-    // The math says "free money" against the other side, but at retail size you
-    // never actually fill. Skip the pair entirely if any leg is too cheap.
-    if (
-      polyYesAsk < MIN_LEG_PRICE || polyNoAsk < MIN_LEG_PRICE ||
-      kalshiYesAsk < MIN_LEG_PRICE || kalshiNoAsk < MIN_LEG_PRICE
-    ) {
-      return null;
-    }
-
     // Build A: YES on Polymarket + NO on Kalshi
     const costA = polyYesAsk + kalshiNoAsk;
     // Build B: NO on Polymarket + YES on Kalshi
@@ -217,6 +206,20 @@ export class PredictionScanner implements Scanner {
     const cost = usingA ? costA : costB;
     // Skip degenerate prices that can't form a valid pair.
     if (cost <= 0) return null;
+
+    // Liquidity guard on the legs we'd actually buy.
+    //
+    // Prices below MIN_LEG_PRICE are almost always thin-book artefacts (a
+    // market with no real ask shows ask = $0.01 or similar). We only care
+    // about the side we'd BUY — long-tail nomination markets legitimately
+    // have YES near zero on the unlikely candidate, but the corresponding
+    // NO side is fine to buy. Filtering on all four prices killed valid
+    // pairs like Ted Cruz @ 2028 GOP nom where YES ~ 0.01 is real, not noise.
+    const polyLegPrice = usingA ? polyYesAsk : polyNoAsk;
+    const kalshiLegPrice = usingA ? kalshiNoAsk : kalshiYesAsk;
+    if (polyLegPrice < MIN_LEG_PRICE || kalshiLegPrice < MIN_LEG_PRICE) {
+      return null;
+    }
 
     const polySide = usingA ? 'YES' : 'NO';
     const kalshiSide = usingA ? 'NO' : 'YES';

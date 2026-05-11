@@ -64,21 +64,31 @@ export class PolymarketExecutor implements Executor {
     if (this.marketsCache && Date.now() - this.marketsCache.cachedAt < this.marketsCacheMs) {
       return this.marketsCache.markets;
     }
-    // Pull a wide slice of active, liquid markets.
-    const params = new URLSearchParams({
-      closed: 'false',
-      active: 'true',
-      limit: '100',
-      order: 'volume24hr',
-      ascending: 'false',
-    });
-    const res = await fetch(`${GAMMA_BASE}/markets?${params.toString()}`);
-    if (!res.ok) throw new Error(`polymarket gamma HTTP ${res.status}`);
-    const rows = (await res.json()) as GammaMarketRow[];
+    // Paginate across multiple pages of active markets ordered by 24h volume.
+    // The top 100 alone misses curated allowlist pairs (e.g. 2028 nominee
+    // markets sit well below the BTC/election headline volume), so the
+    // scanner can't match them. 5 pages * 100 = 500 markets gives enough
+    // coverage for the allowlist while keeping the request cost reasonable.
     const markets: PolymarketMarket[] = [];
-    for (const r of rows) {
-      const parsed = parseGammaRow(r);
-      if (parsed) markets.push(parsed);
+    const maxPages = 5;
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({
+        closed: 'false',
+        active: 'true',
+        limit: '100',
+        offset: String(page * 100),
+        order: 'volume24hr',
+        ascending: 'false',
+      });
+      const res = await fetch(`${GAMMA_BASE}/markets?${params.toString()}`);
+      if (!res.ok) throw new Error(`polymarket gamma HTTP ${res.status}`);
+      const rows = (await res.json()) as GammaMarketRow[];
+      if (rows.length === 0) break;
+      for (const r of rows) {
+        const parsed = parseGammaRow(r);
+        if (parsed) markets.push(parsed);
+      }
+      if (rows.length < 100) break;
     }
     this.marketsCache = { markets, cachedAt: Date.now() };
     return markets;

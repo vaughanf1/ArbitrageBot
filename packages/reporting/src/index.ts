@@ -94,3 +94,40 @@ export function renderDailyReportHtml(report: DailyReport): string {
 </div>
 </body></html>`;
 }
+
+/**
+ * Send the daily report via Resend.
+ *
+ * Returns `skipped` when the email config isn't fully set — that's the
+ * default state on first deploy, and the engine should not crash just
+ * because the report channel is unconfigured. Once Cesar provides a
+ * Resend API key + verified `from` domain, set the three env vars on
+ * Railway (RESEND_API_KEY, REPORT_EMAIL_FROM, REPORT_EMAIL_TO) and the
+ * next-day report will land in his inbox.
+ */
+export async function sendDailyReportEmail(opts: {
+  report: DailyReport;
+  resendKey: string;
+  from: string;
+  to: string;
+}): Promise<{ sent: true; id: string } | { sent: false; reason: string }> {
+  if (!opts.resendKey || !opts.from || !opts.to) {
+    return { sent: false, reason: 'email config not set (RESEND_API_KEY / REPORT_EMAIL_FROM / REPORT_EMAIL_TO)' };
+  }
+  const subject = `Cesar Arb Bot — ${opts.report.date} — ${opts.report.totalPnlUsd >= 0 ? '+' : ''}$${opts.report.totalPnlUsd.toFixed(2)} P&L (${opts.report.trades.length} trades)`;
+  const html = renderDailyReportHtml(opts.report);
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${opts.resendKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ from: opts.from, to: opts.to, subject, html }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    return { sent: false, reason: `resend HTTP ${res.status}: ${text.slice(0, 200)}` };
+  }
+  const body = (await res.json()) as { id?: string };
+  return { sent: true, id: body.id ?? '' };
+}
