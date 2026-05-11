@@ -122,6 +122,11 @@ export class TriangularScanner implements Scanner {
       reasoning: sim.reasoning,
       detectedAt: now,
       expiresAt: now + this.ttlMs,
+      // Triangular is single-venue with three legs of the same pair set —
+      // no resolution-criteria risk because there's no resolution; the
+      // cycle closes in one tick.
+      source: 'confirmed',
+      requiresReview: false,
     };
   }
 }

@@ -49,7 +49,11 @@ export class PolymarketExecutor implements Executor {
   private readonly enableLive: boolean;
   private readonly privateKey?: string;
   private marketsCache: { markets: PolymarketMarket[]; cachedAt: number } | null = null;
-  private readonly marketsCacheMs = 30_000;
+  // Match the engine scan interval (~5s). A longer cache means the bot
+  // trades on stale prices and can re-fire the "same" arb every tick for
+  // the duration of the cache window — turning one real opportunity into
+  // a stream of inflated paper trades.
+  private readonly marketsCacheMs = 5_000;
 
   constructor(opts: { privateKey?: string; enableLive?: boolean } = {}) {
     this.privateKey = opts.privateKey;

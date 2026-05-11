@@ -92,7 +92,10 @@ export class KalshiExecutor implements Executor {
   private readonly apiKeyId?: string;
   private readonly privateKeyPath?: string;
   private marketsCache: { markets: KalshiMarket[]; cachedAt: number } | null = null;
-  private readonly marketsCacheMs = 30_000;
+  // Match the engine scan interval (~5s). See polymarket.ts for the
+  // detailed reason — a long cache window inflates paper P&L by letting
+  // the same arb re-fire every tick before the data refreshes.
+  private readonly marketsCacheMs = 5_000;
 
   constructor(opts: {
     apiKeyId?: string;

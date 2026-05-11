@@ -76,6 +76,17 @@ export class Engine {
   private currentCandidates: Opportunity[] = [];
   private loopHandle: NodeJS.Timeout | null = null;
 
+  /**
+   * Recently-fired opportunity fingerprints with the timestamp of the most
+   * recent fire. Two ticks that produce structurally identical opportunities
+   * (same legs, same sides) won't both auto-trade — the second one is
+   * skipped until DEDUPE_WINDOW_MS elapses. This kills the "cache-window
+   * re-fire" bug where the engine paper-trades the same arb every tick for
+   * 30s before the market-data cache refreshes.
+   */
+  private recentFires: Map<string, number> = new Map();
+  private readonly DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+
   constructor(deps: EngineDeps) {
     this.config = deps.config;
     this.storage = deps.storage;
@@ -198,6 +209,28 @@ export class Engine {
     return this.currentCandidates.filter((o) => o.expiresAt > now);
   }
 
+  /**
+   * Wipe trade history + reset session counters. Used to start fresh
+   * after fixing a bug that produced inflated paper-trade results.
+   */
+  resetForDemo(): void {
+    this.storage.resetTradeHistory();
+    this.recentFires.clear();
+    this.state = freshState(this.config.startingEquityUsd);
+    this.tradedCount = 0;
+    this.scannedCount = 0;
+    this.candidateCount = 0;
+    this.persistState();
+    this.logger.warn('demo state reset — trade history wiped');
+  }
+
+  private gcRecentFires(): void {
+    const cutoff = Date.now() - this.DEDUPE_WINDOW_MS;
+    for (const [fp, ts] of this.recentFires) {
+      if (ts < cutoff) this.recentFires.delete(fp);
+    }
+  }
+
   private async tick(): Promise<void> {
     const tickStart = Date.now();
     try {
@@ -215,7 +248,12 @@ export class Engine {
       }
 
       const minEdge = this.config.limits.minSpreadPct;
-      const tradable = candidates.filter((o) => o.edgePct >= minEdge);
+      // Auto-trade only opportunities that:
+      //   1. clear the spread threshold, AND
+      //   2. don't require human review (heuristic cross-venue matches do —
+      //      a fuzzy title match can't verify the two markets settle on the
+      //      same resolution criteria, so the bot shouldn't book P&L on them)
+      const tradable = candidates.filter((o) => o.edgePct >= minEdge && !o.requiresReview);
       candidates.sort((a, b) => b.edgePct - a.edgePct);
       tradable.sort((a, b) => b.edgePct - a.edgePct);
 
@@ -231,12 +269,20 @@ export class Engine {
       await this.refreshMarketCounts();
 
       // Try to execute the best tradable opportunity (if any).
+      this.gcRecentFires();
       for (const opp of this.currentOpportunities) {
         const decision = this.guard.evaluate(opp, this.state);
         if (!decision.allowed) {
           this.logger.debug({ opp: opp.id, reason: decision.reason }, 'skip');
           continue;
         }
+        const fp = fingerprint(opp);
+        const firedAt = this.recentFires.get(fp);
+        if (firedAt && Date.now() - firedAt < this.DEDUPE_WINDOW_MS) {
+          this.logger.debug({ opp: opp.id, fp, ageMs: Date.now() - firedAt }, 'skip duplicate');
+          continue;
+        }
+        this.recentFires.set(fp, Date.now());
         await this.executeOpportunity(opp);
         break; // one trade per tick keeps things tidy in v1
       }
@@ -387,4 +433,17 @@ function computeRealizedPnl(opp: Opportunity, fills: Fill[]): number {
     return payoff - cost;
   }
   return 0;
+}
+
+/**
+ * Structural identity of an opportunity for dedupe. Two scans that produce
+ * the same legs (same venue + symbol + side) are the same arb regardless
+ * of small price drift, so we suppress re-fire within the dedupe window.
+ */
+function fingerprint(opp: Opportunity): string {
+  const legs = opp.legs
+    .map((l) => `${l.venue}:${l.symbol}:${l.side}`)
+    .sort()
+    .join('|');
+  return `${opp.strategy}/${legs}`;
 }

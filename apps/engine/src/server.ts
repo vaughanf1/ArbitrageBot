@@ -51,6 +51,26 @@ export async function createServer(opts: {
     return { ok: true };
   });
 
+  /**
+   * Admin: wipe trade history + reset daily state. One-shot for clearing
+   * inflated paper-trade data left over from earlier bugs. Token-gated to
+   * stop random callers from nuking the demo.
+   */
+  fastify.post('/api/admin/reset', async (req, reply) => {
+    const adminToken = process.env.ADMIN_TOKEN;
+    if (!adminToken) {
+      reply.code(403);
+      return { ok: false, error: 'ADMIN_TOKEN not configured' };
+    }
+    const provided = (req.headers['x-admin-token'] as string | undefined) ?? '';
+    if (provided !== adminToken) {
+      reply.code(403);
+      return { ok: false, error: 'bad token' };
+    }
+    opts.engine.resetForDemo();
+    return { ok: true, message: 'trade history + daily state cleared' };
+  });
+
   fastify.get('/api/report', async (req) => {
     const date = (req.query as { date?: string }).date ?? ymdUtc(new Date());
     const trades = opts.storage.tradesForDate(date);

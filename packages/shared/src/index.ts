@@ -36,6 +36,25 @@ export interface Opportunity {
   detectedAt: number;
   /** Unix ms after which the opportunity is presumed stale. */
   expiresAt: number;
+  /**
+   * How this pair was identified:
+   *   - 'confirmed': from PREDICTION_PAIRS allowlist or triangular arb on
+   *     a single venue (same-venue → no resolution-criteria risk). Safe to
+   *     auto-trade.
+   *   - 'heuristic': fuzzy text-matched across venues (Polymarket ↔ Kalshi
+   *     strict mode). The matcher cannot verify resolution criteria —
+   *     two markets with similar titles can settle on different
+   *     timestamps or rules. Surfaces for human review only; the engine
+   *     will not auto-fire on these.
+   */
+  source: 'confirmed' | 'heuristic';
+  /**
+   * If true, this opportunity is shown for review but never auto-traded.
+   * Heuristic cross-venue pairs flip this on so the bot doesn't book P&L
+   * on fictional arbs (e.g. two BTC daily strikes with different
+   * resolution timestamps).
+   */
+  requiresReview: boolean;
 }
 
 export interface OpportunityLeg {

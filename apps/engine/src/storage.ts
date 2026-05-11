@@ -59,13 +59,18 @@ export class Storage {
         kill_switch INTEGER NOT NULL
       );
     `);
-    // Add `tradable` column to legacy DBs that pre-date the candidate feed.
-    // Existing rows are assumed tradable=1 (the column default).
-    // Must run BEFORE the tradable-aware index, otherwise CREATE INDEX
-    // references a column that doesn't exist on legacy schemas.
+    // Backwards-compat: add columns to legacy DBs.
+    // Each ALTER must run BEFORE any index/query that references the new column.
     const cols = this.db.prepare(`PRAGMA table_info(opportunities)`).all() as Array<{ name: string }>;
-    if (!cols.some((c) => c.name === 'tradable')) {
+    const has = (name: string) => cols.some((c) => c.name === name);
+    if (!has('tradable')) {
       this.db.exec(`ALTER TABLE opportunities ADD COLUMN tradable INTEGER NOT NULL DEFAULT 1`);
+    }
+    if (!has('source')) {
+      this.db.exec(`ALTER TABLE opportunities ADD COLUMN source TEXT NOT NULL DEFAULT 'confirmed'`);
+    }
+    if (!has('requires_review')) {
+      this.db.exec(`ALTER TABLE opportunities ADD COLUMN requires_review INTEGER NOT NULL DEFAULT 0`);
     }
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_opp_tradable_detected ON opportunities(tradable, detected_at DESC)`);
   }
@@ -74,8 +79,8 @@ export class Storage {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO opportunities
-         (id, strategy, asset_class, edge_pct, size_usd, est_profit_usd, description, reasoning, venues, legs_json, detected_at, expires_at, tradable)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, strategy, asset_class, edge_pct, size_usd, est_profit_usd, description, reasoning, venues, legs_json, detected_at, expires_at, tradable, source, requires_review)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         o.id,
@@ -91,7 +96,14 @@ export class Storage {
         o.detectedAt,
         o.expiresAt,
         tradable ? 1 : 0,
+        o.source,
+        o.requiresReview ? 1 : 0,
       );
+  }
+
+  /** Wipe trades + daily state. Used after the un-deduped run inflated the demo numbers. */
+  resetTradeHistory(): void {
+    this.db.exec(`DELETE FROM trades; DELETE FROM daily_state;`);
   }
 
   recentOpportunities(limit = 50): Opportunity[] {
@@ -197,6 +209,8 @@ interface OpportunityRow {
   legs_json: string;
   detected_at: number;
   expires_at: number;
+  source: string | null;
+  requires_review: number | null;
 }
 
 interface TradeRow {
@@ -236,6 +250,8 @@ function rowToOpportunity(r: OpportunityRow): Opportunity {
     reasoning: r.reasoning,
     detectedAt: r.detected_at,
     expiresAt: r.expires_at,
+    source: (r.source as Opportunity['source']) ?? 'confirmed',
+    requiresReview: r.requires_review === 1,
   };
 }
 

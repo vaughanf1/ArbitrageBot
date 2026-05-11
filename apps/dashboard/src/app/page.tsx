@@ -180,7 +180,11 @@ export default function OverviewPage() {
                     {fmtPct(c.edgePct)}
                   </div>
                   <div className="col-span-4 md:col-span-2 text-right">
-                    {tradable ? (
+                    {c.requiresReview ? (
+                      <span className="pill bg-amber-500/10 text-amber-700" title="Cross-venue heuristic match — resolution criteria not verified. Will not auto-trade.">
+                        review only
+                      </span>
+                    ) : tradable ? (
                       <span className="pill bg-accent-dim text-accent">tradable</span>
                     ) : (
                       <span className="pill bg-black/5 text-ink-subtle">below {fmtPct(status?.limits.minSpreadPct ?? 0)}</span>

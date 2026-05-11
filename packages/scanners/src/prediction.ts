@@ -269,6 +269,12 @@ export class PredictionScanner implements Scanner {
       reasoning,
       detectedAt: now,
       expiresAt: now + this.ttlMs,
+      // Allowlist pairs are human-confirmed equivalent markets — safe to
+      // auto-fire. Heuristic matches can't verify resolution criteria
+      // (a fuzzy title match doesn't prove the two markets settle on the
+      // same timestamp / rule) so we surface them for review only.
+      source: source === 'allowlist' ? 'confirmed' : 'heuristic',
+      requiresReview: source === 'strict',
     };
   }
 }
