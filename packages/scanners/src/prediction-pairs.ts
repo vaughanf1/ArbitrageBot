@@ -78,6 +78,24 @@ export const PREDICTION_PAIRS: PredictionPair[] = [
     kalshiTicker: 'KXPRESNOMR-28-JDV',
     note: 'JD Vance wins 2028 GOP presidential nomination. Source: RNC convention.',
   },
+  {
+    polymarketSlug: 'will-marco-rubio-win-the-2028-republican-presidential-nomination',
+    kalshiEventTicker: 'KXPRESNOMR-28',
+    kalshiTicker: 'KXPRESNOMR-28-MR',
+    note: 'Marco Rubio wins 2028 GOP presidential nomination. Source: RNC convention.',
+  },
+  {
+    polymarketSlug: 'will-ron-desantis-win-the-2028-republican-presidential-nomination',
+    kalshiEventTicker: 'KXPRESNOMR-28',
+    kalshiTicker: 'KXPRESNOMR-28-RDS',
+    note: 'Ron DeSantis wins 2028 GOP presidential nomination. Source: RNC convention.',
+  },
+  {
+    polymarketSlug: 'will-tucker-carlson-win-the-2028-republican-presidential-nomination',
+    kalshiEventTicker: 'KXPRESNOMR-28',
+    kalshiTicker: 'KXPRESNOMR-28-TCAR',
+    note: 'Tucker Carlson wins 2028 GOP presidential nomination. Source: RNC convention.',
+  },
 
   // ============================================================
   // 2028 DEMOCRATIC PRESIDENTIAL NOMINATION

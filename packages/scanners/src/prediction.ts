@@ -98,10 +98,42 @@ export class PredictionScanner implements Scanner {
       this.kalshi.listActiveMarkets().catch(() => [] as KalshiMarket[]),
     ]);
 
-    if (this.matchMode === 'allowlist') {
-      return this.scanAllowlist(polyMarkets, kalshiMarkets);
+    // Top up Polymarket with the curated allowlist slugs that weren't in the
+    // volume-ranked top-N. Otherwise pairs that don't trade much each day
+    // (most 2028 nomination markets) silently disappear from the scanner.
+    const polyBySlug = new Map(polyMarkets.map((m) => [m.slug, m]));
+    const missing = this.pairs.map((p) => p.polymarketSlug).filter((s) => !polyBySlug.has(s));
+    if (missing.length > 0) {
+      const extra = await this.polymarket.getMarketsBySlugs(missing).catch(() => [] as PolymarketMarket[]);
+      for (const m of extra) {
+        if (!polyBySlug.has(m.slug)) {
+          polyMarkets.push(m);
+          polyBySlug.set(m.slug, m);
+        }
+      }
     }
-    return this.scanStrict(polyMarkets, kalshiMarkets);
+
+    // Allowlist always runs — those are the curated, auto-tradable pairs.
+    const out = this.scanAllowlist(polyMarkets, kalshiMarkets);
+
+    // Strict mode additionally surfaces heuristic candidates for human
+    // review (they're flagged requiresReview=true and never auto-traded).
+    // De-dupe against allowlist hits so we don't double-list a pair that's
+    // already in the curated set.
+    if (this.matchMode === 'strict') {
+      const seen = new Set<string>();
+      for (const o of out) {
+        for (const l of o.legs) seen.add(`${l.venue}:${l.symbol.split(':')[0]}`);
+      }
+      const heur = this.scanStrict(polyMarkets, kalshiMarkets).filter((o) => {
+        for (const l of o.legs) {
+          if (seen.has(`${l.venue}:${l.symbol.split(':')[0]}`)) return false;
+        }
+        return true;
+      });
+      out.push(...heur);
+    }
+    return out;
   }
 
   /** Allowlist mode: only consider explicitly-paired markets. */

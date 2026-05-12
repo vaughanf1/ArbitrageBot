@@ -144,6 +144,28 @@ export class PolymarketExecutor implements Executor {
     return markets.find((m) => m.slug === slug) ?? null;
   }
 
+  /**
+   * Fetch specific markets by slug directly. Used to guarantee allowlist
+   * pairs are always scannable regardless of where they sit in the
+   * volume-ranked listActiveMarkets() output — the curated set is small
+   * but only a subset of pairs trade enough 24h volume to appear in the
+   * top 500. Bypasses the cache: callers can merge into the cached set.
+   */
+  async getMarketsBySlugs(slugs: string[]): Promise<PolymarketMarket[]> {
+    if (slugs.length === 0) return [];
+    const params = new URLSearchParams();
+    for (const s of slugs) params.append('slug', s);
+    const res = await fetch(`${GAMMA_BASE}/markets?${params.toString()}`);
+    if (!res.ok) return [];
+    const rows = (await res.json()) as GammaMarketRow[];
+    const out: PolymarketMarket[] = [];
+    for (const r of rows) {
+      const parsed = parseGammaRow(r);
+      if (parsed) out.push(parsed);
+    }
+    return out;
+  }
+
   // Expose CLOB base for clients that may want it later.
   static readonly clobBase = CLOB_BASE;
 }
