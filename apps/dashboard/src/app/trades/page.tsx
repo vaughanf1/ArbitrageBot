@@ -29,14 +29,17 @@ export default function TradesPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-h1">Trades</h1>
+      <header>
+        <div className="eyebrow">Execution ledger</div>
+        <h1 className="mt-2 text-h1 uppercase tracking-tight">Trades</h1>
+      </header>
 
       <div className="card">
         {trades.length === 0 ? (
           <p className="text-sm text-ink-muted">No trades yet.</p>
         ) : (
           <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase tracking-wider text-ink-muted">
+            <thead className="text-left text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
               <tr>
                 <th className="py-2">Time</th>
                 <th>Strategy</th>
@@ -48,7 +51,7 @@ export default function TradesPage() {
                 <th />
               </tr>
             </thead>
-            <tbody className="divide-y divide-black/5">
+            <tbody className="divide-y divide-line">
               {trades.map((t) => (
                 <Fragment key={t.id}>
                   <tr>
@@ -56,12 +59,12 @@ export default function TradesPage() {
                     <td>{t.strategy}</td>
                     <td className="text-ink-muted">{t.assetClass}</td>
                     <td>
-                      <span className={`pill ${t.mode === 'paper' ? 'bg-accent-dim text-accent' : 'bg-danger/10 text-danger'}`}>
+                      <span className={t.mode === 'paper' ? 'pill-gold' : 'pill-danger'}>
                         {t.mode}
                       </span>
                     </td>
                     <td className="text-right">{fmtUsd(t.notionalUsd)}</td>
-                    <td className={`text-right font-medium ${(t.pnlUsd ?? 0) >= 0 ? 'text-accent' : 'text-danger'}`}>
+                    <td className={`text-right font-semibold tabular-nums ${(t.pnlUsd ?? 0) >= 0 ? 'text-accent' : 'text-danger'}`}>
                       {t.pnlUsd === null ? '—' : fmtUsd(t.pnlUsd, { signed: true })}
                     </td>
                     <td>
@@ -70,7 +73,7 @@ export default function TradesPage() {
                     <td>
                       <button
                         onClick={() => setOpen(open === t.id ? null : t.id)}
-                        className="text-xs text-accent hover:underline"
+                        className="text-xs font-semibold uppercase tracking-wider text-accent hover:text-accent-hover"
                       >
                         {open === t.id ? 'Hide' : 'Details'}
                       </button>
@@ -78,7 +81,7 @@ export default function TradesPage() {
                   </tr>
                   {open === t.id && (
                     <tr key={`${t.id}-detail`}>
-                      <td colSpan={8} className="bg-black/[0.02] px-4 py-3">
+                      <td colSpan={8} className="bg-white/[0.02] px-4 py-3">
                         <p className="mb-2 text-xs text-ink-muted">Reasoning</p>
                         <p className="mb-3 text-sm">{t.reasoning}</p>
                         <p className="mb-2 text-xs text-ink-muted">Fills</p>
@@ -120,8 +123,8 @@ export default function TradesPage() {
 }
 
 function statusTone(s: Trade['status']): string {
-  if (s === 'closed') return 'bg-accent-dim text-accent';
-  if (s === 'open') return 'bg-black/5 text-ink-muted';
-  if (s === 'failed') return 'bg-danger/10 text-danger';
-  return 'bg-black/5 text-ink-muted';
+  if (s === 'closed') return 'pill-gold';
+  if (s === 'open') return 'pill-mute';
+  if (s === 'failed') return 'pill-danger';
+  return 'pill-mute';
 }
