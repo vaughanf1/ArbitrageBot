@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { Opportunity, Trade } from '@cesar-arb/shared';
+import type { Opportunity, RiskLimits, Trade } from '@cesar-arb/shared';
 
 /**
  * Append-only persistence for trades and opportunities.
@@ -57,6 +57,12 @@ export class Storage {
         exposure_usd REAL NOT NULL,
         realized_pnl_usd REAL NOT NULL,
         kill_switch INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
       );
     `);
     // Backwards-compat: add columns to legacy DBs.
@@ -189,6 +195,30 @@ export class Storage {
       realizedPnlUsd: row.realized_pnl_usd,
       killSwitch: row.kill_switch === 1,
     };
+  }
+
+  /**
+   * Persist Cesar's risk limits so dashboard edits survive an engine
+   * restart (and override the .env defaults on next boot).
+   */
+  saveLimits(limits: RiskLimits): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('risk_limits', ?, ?)`,
+      )
+      .run(JSON.stringify(limits), Date.now());
+  }
+
+  loadLimits(): RiskLimits | null {
+    const row = this.db
+      .prepare(`SELECT value FROM settings WHERE key = 'risk_limits'`)
+      .get() as { value: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.value) as RiskLimits;
+    } catch {
+      return null;
+    }
   }
 
   close(): void {

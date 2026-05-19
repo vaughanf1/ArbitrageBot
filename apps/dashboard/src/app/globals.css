@@ -9,12 +9,15 @@
   }
   body {
     @apply bg-bg text-ink font-sans;
+    /* Gradient dark-blue base (per client mockup) with a faint gold glow,
+       a deep-navy vignette, and a low-contrast intelligence grid. */
     background-image:
-      radial-gradient(900px 500px at 85% -5%, rgba(201, 162, 75, 0.10), transparent 60%),
-      radial-gradient(700px 600px at 0% 100%, rgba(201, 162, 75, 0.05), transparent 55%),
-      linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
-    background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+      radial-gradient(1100px 620px at 80% -8%, rgba(46, 91, 216, 0.22), transparent 60%),
+      radial-gradient(820px 700px at 4% 102%, rgba(201, 162, 75, 0.06), transparent 55%),
+      linear-gradient(180deg, #0A1224 0%, #070B16 46%, #05070F 100%),
+      linear-gradient(rgba(150, 180, 255, 0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(150, 180, 255, 0.022) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 100% 100%, 44px 44px, 44px 44px;
     background-attachment: fixed;
   }
 }
@@ -22,6 +25,23 @@
 @layer components {
   .card {
     @apply bg-bg-card rounded-card shadow-card p-6 border border-line;
+  }
+  /* Blue gradient analytics surface — the graph panels from the mockup. */
+  .chart-card {
+    @apply relative overflow-hidden rounded-card p-5 border border-line;
+    background:
+      radial-gradient(120% 120% at 15% 0%, rgba(86, 130, 245, 0.30), transparent 55%),
+      linear-gradient(160deg, #1B2C54 0%, #122039 55%, #0C1322 100%);
+    box-shadow: 0 10px 40px rgba(2, 6, 18, 0.6), inset 0 1px 0 rgba(150, 180, 255, 0.10);
+  }
+  .chart-card:hover {
+    box-shadow: 0 14px 50px rgba(2, 6, 18, 0.7), inset 0 1px 0 rgba(150, 180, 255, 0.18);
+  }
+  .chart-title {
+    @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-muted;
+  }
+  .chart-figure {
+    @apply text-2xl font-semibold tabular-nums text-ink;
   }
   .panel-title {
     @apply text-[13px] font-semibold uppercase tracking-[0.14em] text-ink;

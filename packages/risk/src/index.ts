@@ -23,7 +23,16 @@ export interface RiskDecision {
  * RiskGuard whether each candidate trade is allowed before placing it.
  */
 export class RiskGuard {
-  constructor(private readonly limits: RiskLimits) {}
+  constructor(private limits: RiskLimits) {}
+
+  /** Hot-swap the risk limits (Cesar edited them from the dashboard). */
+  setLimits(next: RiskLimits): void {
+    this.limits = next;
+  }
+
+  getLimits(): RiskLimits {
+    return this.limits;
+  }
 
   /** Returns the size we are willing to take, capped by trade-size limit. */
   sizeFor(opp: Opportunity, state: RiskState): number {

@@ -3,6 +3,7 @@ import type {
   Opportunity,
   Trade,
   DailyReport,
+  RiskLimits,
 } from '@cesar-arb/shared';
 
 const ENGINE_URL =
@@ -31,6 +32,8 @@ export const api = {
   candidates: () => get<{ live: Opportunity[]; recent: Opportunity[] }>('/api/candidates'),
   trades: (limit = 100) => get<{ trades: Trade[] }>(`/api/trades?limit=${limit}`),
   report: (date?: string) => get<DailyReport>(`/api/report${date ? `?date=${date}` : ''}`),
+  updateLimits: (patch: Partial<RiskLimits>) =>
+    post<{ ok: boolean; limits: RiskLimits }>('/api/limits', patch),
   setKillSwitch: (active: boolean) => post<{ ok: boolean; killSwitch: boolean }>('/api/kill-switch', { active }),
   start: () => post<{ ok: boolean }>('/api/start'),
   stop: () => post<{ ok: boolean }>('/api/stop'),

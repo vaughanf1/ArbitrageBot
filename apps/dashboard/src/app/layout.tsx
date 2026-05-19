@@ -4,8 +4,8 @@ import { Nav } from '@/components/Nav';
 import { Radar } from '@/components/Radar';
 
 export const metadata: Metadata = {
-  title: 'Cesar Arb — Live Arbitrage Intelligence',
-  description: 'Multi-venue arbitrage intelligence terminal',
+  title: 'NATHAN-I — Live Arbitrage Intelligence',
+  description: 'NATHAN-I · multi-venue arbitrage intelligence terminal',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -26,7 +26,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </main>
             <footer className="mx-auto max-w-[1180px] px-4 pb-10 md:px-8">
               <div className="hairline flex flex-col gap-2 pt-5 text-[11px] uppercase tracking-[0.18em] text-ink-subtle sm:flex-row sm:items-center sm:justify-between">
-                <span>Institutional arbitrage infrastructure · Paper mode</span>
+                <span>NATHAN-I · Institutional arbitrage infrastructure · Paper mode</span>
                 <span>BitGet · Polymarket · Kalshi</span>
               </div>
             </footer>

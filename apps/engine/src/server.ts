@@ -41,6 +41,36 @@ export async function createServer(opts: {
     return { ok: true, killSwitch: Boolean(active) };
   });
 
+  /**
+   * Update Cesar's risk limits at runtime. Accepts a partial — only the
+   * fields sent are changed. Open like the kill-switch / start-stop
+   * controls (non-destructive in paper mode); the engine sanitises input.
+   */
+  fastify.post('/api/limits', async (req) => {
+    const body = (req.body ?? {}) as Partial<{
+      maxTradeSizeUsd: number;
+      maxDailyExposureUsd: number;
+      maxDailyLossPct: number;
+      trailingStopPct: number;
+      minSpreadPct: number;
+    }>;
+    const patch: Record<string, number> = {};
+    for (const k of [
+      'maxTradeSizeUsd',
+      'maxDailyExposureUsd',
+      'maxDailyLossPct',
+      'trailingStopPct',
+      'minSpreadPct',
+    ] as const) {
+      const v = body[k];
+      if (v !== undefined && v !== null && Number.isFinite(Number(v))) {
+        patch[k] = Number(v);
+      }
+    }
+    const limits = opts.engine.updateLimits(patch);
+    return { ok: true, limits };
+  });
+
   fastify.post('/api/start', async () => {
     await opts.engine.start();
     return { ok: true };

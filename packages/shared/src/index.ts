@@ -4,11 +4,30 @@
  * shapes stay in sync across the wire.
  */
 
-export type Venue = 'bitget' | 'polymarket' | 'kalshi' | 'paper';
+export type Venue =
+  | 'bitget'
+  | 'binance'
+  | 'coinbase'
+  | 'kraken'
+  | 'okx'
+  | 'bybit'
+  | 'polymarket'
+  | 'kalshi'
+  | 'paper';
+
+/** Crypto spot venues that quote against USD/USDT and are comparable cross-venue. */
+export const CRYPTO_SPOT_VENUES: Venue[] = [
+  'binance',
+  'coinbase',
+  'kraken',
+  'okx',
+  'bybit',
+  'bitget',
+];
 
 export type AssetClass = 'crypto' | 'prediction' | 'forex' | 'equity' | 'commodity';
 
-export type StrategyKind = 'triangular' | 'prediction-pair';
+export type StrategyKind = 'triangular' | 'prediction-pair' | 'cross-exchange';
 
 export type TradingMode = 'paper' | 'live';
 
@@ -146,8 +165,12 @@ export interface EngineStatus {
   lastScanAt: number | null;
   /** Wall-clock ms of last scan loop. */
   lastScanMs: number;
-  /** Markets currently being monitored by venue. */
-  marketCounts: { bitget: number; polymarket: number; kalshi: number };
+  /**
+   * Markets currently being monitored, keyed by venue name. Open-ended so
+   * new venues surface on the dashboard without a type/engine change.
+   * Always includes at least bitget / polymarket / kalshi.
+   */
+  marketCounts: Record<string, number>;
 }
 
 export interface DailyReport {
