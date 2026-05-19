@@ -7,6 +7,29 @@ import { fmtUsd, fmtPct, fmtTime, fmtAge, fmtCount } from '@/lib/format';
 import { Radar } from '@/components/Radar';
 import { useSessionSeries, AnalyticsRow, ActivityTimeline } from '@/components/Charts';
 
+const VENUE_LABELS: Record<string, string> = {
+  binance: 'Binance',
+  coinbase: 'Coinbase',
+  kraken: 'Kraken',
+  okx: 'OKX',
+  bybit: 'Bybit',
+  bitget: 'BitGet',
+  polymarket: 'Polymarket',
+  kalshi: 'Kalshi',
+};
+const VENUE_ORDER = Object.keys(VENUE_LABELS);
+
+function venueLabel(v: string): string {
+  return VENUE_LABELS[v] ?? v;
+}
+
+/** Stable, human-ordered [venue, count] pairs from the marketCounts record. */
+function venueEntries(mc: Record<string, number>): [string, number][] {
+  const known = VENUE_ORDER.filter((v) => v in mc).map((v) => [v, mc[v]] as [string, number]);
+  const extra = Object.entries(mc).filter(([k]) => !VENUE_ORDER.includes(k));
+  return [...known, ...extra];
+}
+
 export default function OverviewPage() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [opps, setOpps] = useState<Opportunity[]>([]);
@@ -109,9 +132,19 @@ export default function OverviewPage() {
       <section className="flex flex-wrap items-center gap-x-8 gap-y-3 rounded-card border border-line bg-bg-card px-6 py-4 text-sm">
         <StripItem label="Mode" value={status?.mode ?? '—'} gold />
         <StripItem label="Min spread" value={status ? fmtPct(status.limits.minSpreadPct) : '—'} />
-        <StripItem label="BitGet" value={fmtCount(status?.marketCounts.bitget ?? 0)} />
-        <StripItem label="Polymarket" value={fmtCount(status?.marketCounts.polymarket ?? 0)} />
-        <StripItem label="Kalshi" value={fmtCount(status?.marketCounts.kalshi ?? 0)} />
+        <StripItem
+          label="Venues"
+          value={status ? String(venueEntries(status.marketCounts).length) : '—'}
+          gold
+        />
+        <StripItem
+          label="Markets"
+          value={
+            status
+              ? fmtCount(venueEntries(status.marketCounts).reduce((s, [, n]) => s + n, 0))
+              : '—'
+          }
+        />
         <div className="ml-auto text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
           {status?.lastScanAt ? `Last scan ${fmtAge(status.lastScanAt)} · ${status.lastScanMs}ms` : 'Awaiting first scan…'}
         </div>
@@ -163,10 +196,10 @@ export default function OverviewPage() {
             {status?.lastScanAt ? `${status.lastScanMs}ms scan` : 'waiting…'}
           </span>
         </div>
-        <div className="grid grid-cols-3 gap-4">
-          <VenueStat label="BitGet pairs" count={status?.marketCounts.bitget ?? 0} />
-          <VenueStat label="Polymarket markets" count={status?.marketCounts.polymarket ?? 0} />
-          <VenueStat label="Kalshi markets" count={status?.marketCounts.kalshi ?? 0} />
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {(status ? venueEntries(status.marketCounts) : []).map(([venue, count]) => (
+            <VenueStat key={venue} label={venueLabel(venue)} count={count} />
+          ))}
         </div>
       </section>
 

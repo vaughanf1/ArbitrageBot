@@ -310,9 +310,14 @@ export function AnalyticsRow({
 
   const byStrategy = [
     {
+      label: 'Cross-exchange',
+      value: candidates.filter((c) => c.strategy === 'cross-exchange').length,
+      color: '#5682F5',
+    },
+    {
       label: 'Prediction-pair',
       value: candidates.filter((c) => c.strategy === 'prediction-pair').length,
-      color: '#5682F5',
+      color: '#7FA6F5',
     },
     {
       label: 'Triangular',
@@ -321,7 +326,17 @@ export function AnalyticsRow({
     },
   ];
 
-  const venues = status?.marketCounts ?? { bitget: 0, polymarket: 0, kalshi: 0 };
+  // Dynamic venue mix — new exchanges appear automatically. Cycle a small
+  // blue→gold palette so the donut stays legible as venues grow.
+  const VENUE_PALETTE = ['#5682F5', '#7FA6F5', '#9CC0FF', '#3E63C8', '#C9A24B', '#E3BE6A', '#6E8FE8', '#B98F3C'];
+  const venueSlices = Object.entries(status?.marketCounts ?? {})
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, value], i) => ({
+      label: label.charAt(0).toUpperCase() + label.slice(1),
+      value,
+      color: VENUE_PALETTE[i % VENUE_PALETTE.length] as string,
+    }));
 
   return (
     <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -348,14 +363,8 @@ export function AnalyticsRow({
         <Donut slices={byStrategy} />
       </ChartCard>
 
-      <ChartCard title="Markets by venue" sub="Order books under watch">
-        <Donut
-          slices={[
-            { label: 'Kalshi', value: venues.kalshi, color: '#5682F5' },
-            { label: 'Polymarket', value: venues.polymarket, color: '#7FA6F5' },
-            { label: 'BitGet', value: venues.bitget, color: GOLD },
-          ]}
-        />
+      <ChartCard title="Markets by venue" sub={`${venueSlices.length} venues under watch`}>
+        <Donut slices={venueSlices} />
       </ChartCard>
 
       <ChartCard

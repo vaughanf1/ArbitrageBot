@@ -10,14 +10,21 @@ import {
   KalshiExecutor,
   PaperExecutor,
   PolymarketExecutor,
+  CexSpotExecutor,
+  makeCexSpotExecutor,
+  CEX_SPOT_VENUES,
   type Executor,
 } from '@cesar-arb/executors';
 import {
   PredictionScanner,
   TriangularScanner,
+  CrossExchangeScanner,
   DEFAULT_TRIANGLES,
   type Scanner,
 } from '@cesar-arb/scanners';
+
+/** Canonical assets compared across spot venues by the cross-exchange scanner. */
+const CROSS_EXCHANGE_ASSETS = ['BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'LINK', 'AVAX', 'LTC', 'BCH'];
 import { freshState, maybeResetForNewDay, RiskGuard, ymdUtc } from '@cesar-arb/risk';
 import { buildDailyReport, sendDailyReportEmail } from '@cesar-arb/reporting';
 import type { EngineConfig } from './config.js';
@@ -58,7 +65,7 @@ export class Engine {
   private tradedCount = 0;
   private lastScanAt: number | null = null;
   private lastScanMs = 0;
-  private marketCounts = { bitget: 0, polymarket: 0, kalshi: 0 };
+  private marketCounts: Record<string, number> = { bitget: 0, polymarket: 0, kalshi: 0 };
 
   private bitget!: BitgetExecutor;
   private polymarket!: PolymarketExecutor;
@@ -66,6 +73,8 @@ export class Engine {
   private paperBitget!: PaperExecutor;
   private paperPoly!: PaperExecutor;
   private paperKalshi!: PaperExecutor;
+  /** Read-only spot data sources for the cross-exchange scanner. */
+  private cexSpot: CexSpotExecutor[] = [];
 
   private scanners: Scanner[] = [];
   private executorByVenue: Map<string, Executor> = new Map();
@@ -140,6 +149,18 @@ export class Engine {
     this.executorByVenue.set('bitget', this.paperBitget);
     this.executorByVenue.set('polymarket', this.paperPoly);
     this.executorByVenue.set('kalshi', this.paperKalshi);
+
+    // Public spot data sources (no API keys). Each is paper-wrapped so a
+    // cross-exchange opportunity's legs can still simulate fills.
+    for (const name of CEX_SPOT_VENUES) {
+      const exec = makeCexSpotExecutor(name);
+      this.cexSpot.push(exec);
+      this.executorByVenue.set(
+        name,
+        new PaperExecutor({ dataSource: exec, feeBps: 10, slippageBps: 5 }),
+      );
+      this.marketCounts[name] = 0;
+    }
   }
 
   private buildScanners() {
@@ -157,6 +178,17 @@ export class Engine {
         minEdgePct: this.config.limits.minSpreadPct,
         sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
         matchMode: this.config.predictionMatchMode,
+      }),
+      new CrossExchangeScanner({
+        venues: this.cexSpot.map((e) => ({
+          venue: e.venue,
+          executor: e,
+          quoteCcy: e.quoteCcy,
+        })),
+        assets: CROSS_EXCHANGE_ASSETS,
+        minEdgePct: this.config.limits.minSpreadPct,
+        sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
+        feeBps: 10,
       }),
     ];
   }
@@ -375,16 +407,21 @@ export class Engine {
       triangleSymbols.add(t.pairs.quoteOther);
       triangleSymbols.add(t.pairs.midOther);
     }
-    const [bitgetTickers, polyMarkets, kalshiMarkets] = await Promise.allSettled([
+    const [bitgetTickers, polyMarkets, kalshiMarkets, ...spot] = await Promise.allSettled([
       this.bitget.tickers([...triangleSymbols]),
       this.polymarket.listActiveMarkets(),
       this.kalshi.listActiveMarkets(),
+      ...this.cexSpot.map((e) => e.tickers(CROSS_EXCHANGE_ASSETS)),
     ]);
-    this.marketCounts = {
-      bitget: bitgetTickers.status === 'fulfilled' ? bitgetTickers.value.length : this.marketCounts.bitget,
-      polymarket: polyMarkets.status === 'fulfilled' ? polyMarkets.value.length : this.marketCounts.polymarket,
-      kalshi: kalshiMarkets.status === 'fulfilled' ? kalshiMarkets.value.length : this.marketCounts.kalshi,
-    };
+    const next = { ...this.marketCounts };
+    if (bitgetTickers.status === 'fulfilled') next.bitget = bitgetTickers.value.length;
+    if (polyMarkets.status === 'fulfilled') next.polymarket = polyMarkets.value.length;
+    if (kalshiMarkets.status === 'fulfilled') next.kalshi = kalshiMarkets.value.length;
+    this.cexSpot.forEach((e, i) => {
+      const r = spot[i];
+      if (r && r.status === 'fulfilled') next[e.venue] = r.value.length;
+    });
+    this.marketCounts = next;
   }
 
   private async executeOpportunity(opp: Opportunity): Promise<void> {
@@ -487,6 +524,17 @@ function computeRealizedPnl(opp: Opportunity, fills: Fill[]): number {
     const finalReceive = last.price * last.qty;
     const totalFees = fills.reduce((s, f) => s + f.feeUsd, 0);
     return finalReceive - initialOutlay - totalFees;
+  }
+  if (opp.strategy === 'cross-exchange') {
+    // Two simultaneous legs: buy the cheap venue, sell the rich one. P&L is
+    // sell proceeds − buy outlay − both legs' fees (paper books both now;
+    // real execution assumes pre-positioned inventory on each venue).
+    const buy = fills.find((f) => f.side === 'buy');
+    const sell = fills.find((f) => f.side === 'sell');
+    if (!buy || !sell) return 0;
+    const outlay = buy.price * buy.qty + buy.feeUsd;
+    const proceeds = sell.price * sell.qty - sell.feeUsd;
+    return proceeds - outlay;
   }
   if (opp.strategy === 'prediction-pair') {
     // Pay (price_a * qty_a) + (price_b * qty_b) for $1 payoff per pair.
