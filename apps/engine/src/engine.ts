@@ -2,6 +2,7 @@ import type {
   EngineStatus,
   Fill,
   Opportunity,
+  RiskLimits,
   Trade,
   TradingMode,
 } from '@cesar-arb/shared';
@@ -105,6 +106,15 @@ export class Engine {
     this.logger = deps.logger;
     this.mode = this.config.mode;
     this.guard = new RiskGuard(this.config.limits);
+
+    // Cesar's dashboard edits are persisted and take precedence over the
+    // .env defaults on restart.
+    const savedLimits = this.storage.loadLimits();
+    if (savedLimits) {
+      this.config.limits = sanitizeLimits({ ...this.config.limits, ...savedLimits });
+      this.guard.setLimits(this.config.limits);
+      this.logger.info({ limits: this.config.limits }, 'loaded persisted risk limits (override .env)');
+    }
 
     const today = ymdUtc(new Date());
     const persisted = this.storage.loadDailyState(today);
@@ -249,6 +259,22 @@ export class Engine {
     } else {
       this.logger.warn({ date, reason: result.reason }, 'daily report not sent');
     }
+  }
+
+  /**
+   * Apply a (partial) risk-limits edit from the dashboard. Sanitises the
+   * input, hot-swaps the guard, rebuilds scanners so the new min-spread /
+   * trade-size take effect immediately, and persists so it survives a
+   * restart. Returns the limits actually applied.
+   */
+  updateLimits(patch: Partial<RiskLimits>): RiskLimits {
+    const merged = sanitizeLimits({ ...this.config.limits, ...patch });
+    this.config.limits = merged;
+    this.guard.setLimits(merged);
+    this.buildScanners(); // propagate new minSpreadPct / sizeUsd
+    this.storage.saveLimits(merged);
+    this.logger.warn({ limits: merged }, 'risk limits updated from dashboard');
+    return merged;
   }
 
   setKillSwitch(active: boolean): void {
@@ -508,6 +534,26 @@ export class Engine {
       killSwitch: this.state.killSwitch,
     });
   }
+}
+
+/**
+ * Clamp dashboard-supplied limits to sane bounds. A bad field falls back
+ * to its current value rather than rejecting the whole edit, so a typo in
+ * one box doesn't wipe the rest.
+ */
+function sanitizeLimits(l: RiskLimits): RiskLimits {
+  const pos = (v: number, fallback: number) =>
+    Number.isFinite(v) && v > 0 ? v : fallback;
+  const pct = (v: number, fallback: number) =>
+    Number.isFinite(v) && v >= 0 && v <= 100 ? v : fallback;
+  return {
+    maxTradeSizeUsd: pos(l.maxTradeSizeUsd, 100),
+    maxDailyExposureUsd: pos(l.maxDailyExposureUsd, 500),
+    maxDailyLossPct: pct(l.maxDailyLossPct, 5),
+    trailingStopPct: pct(l.trailingStopPct, 5),
+    // min spread can legitimately be 0 (take any positive edge); cap at 100%.
+    minSpreadPct: pct(l.minSpreadPct, 1),
+  };
 }
 
 function computeRealizedPnl(opp: Opportunity, fills: Fill[]): number {
