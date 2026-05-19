@@ -36,7 +36,7 @@ export function Nav() {
             <span className="block h-3 w-3 rotate-45 bg-accent" style={{ boxShadow: '0 0 12px rgba(201,162,75,0.7)' }} />
           </span>
           <span className="leading-tight">
-            <span className="block text-sm font-bold uppercase tracking-[0.18em] text-ink">Cesar Arb</span>
+            <span className="block text-sm font-bold uppercase tracking-[0.18em] text-ink">NATHAN-I</span>
             <span className="block text-[10px] uppercase tracking-[0.22em] text-ink-muted">Arbitrage Intelligence</span>
           </span>
         </Link>

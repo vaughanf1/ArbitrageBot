@@ -1,8 +1,8 @@
 import type { Config } from 'tailwindcss';
 
-// Dark institutional "intelligence terminal" theme.
-// Semantic token names are preserved (accent, bg, ink, danger, ok) so pages
-// re-skin automatically; `accent` is now brass-gold instead of system blue.
+// NATHAN-I "intelligence terminal" theme — gradient dark-blue base with a
+// brass-gold accent (per client mockup). Semantic token names are preserved
+// (accent, bg, ink, danger, ok) so pages re-skin automatically.
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   theme: {
@@ -17,13 +17,20 @@ const config: Config = {
           DEFAULT: '#C9A24B',
           soft: '#E3BE6A',
         },
+        // Dark-blue base. `bg` is the page; `card` / `elevated` are surfaces.
         bg: {
-          DEFAULT: '#08080A',
-          card: '#0F0F12',
-          elevated: '#16161A',
+          DEFAULT: '#070B16',
+          card: '#0C1322',
+          elevated: '#111B2E',
+        },
+        // Chart-surface blue (the gradient panels in the mockup).
+        chart: {
+          DEFAULT: '#2E5BD8',
+          glow: 'rgba(46,91,216,0.55)',
+          ink: '#7FA6F5',
         },
         line: {
-          DEFAULT: 'rgba(255,255,255,0.07)',
+          DEFAULT: 'rgba(150,180,255,0.10)',
           gold: 'rgba(201,162,75,0.22)',
         },
         ink: {
@@ -54,9 +61,10 @@ const config: Config = {
         pill: '999px',
       },
       boxShadow: {
-        card: '0 0 0 1px rgba(201,162,75,0.08), 0 10px 40px rgba(0,0,0,0.55)',
-        cardHover: '0 0 0 1px rgba(201,162,75,0.18), 0 14px 50px rgba(0,0,0,0.6)',
+        card: '0 0 0 1px rgba(150,180,255,0.06), 0 10px 40px rgba(2,6,18,0.6)',
+        cardHover: '0 0 0 1px rgba(201,162,75,0.18), 0 14px 50px rgba(2,6,18,0.7)',
         glow: '0 0 60px rgba(201,162,75,0.16)',
+        chart: '0 10px 40px rgba(2,6,18,0.6), inset 0 1px 0 rgba(150,180,255,0.10)',
       },
       keyframes: {
         sweep: {

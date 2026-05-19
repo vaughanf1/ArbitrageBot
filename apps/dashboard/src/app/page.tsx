@@ -5,6 +5,7 @@ import type { EngineStatus, Opportunity, Trade } from '@cesar-arb/shared';
 import { api } from '@/lib/api';
 import { fmtUsd, fmtPct, fmtTime, fmtAge, fmtCount } from '@/lib/format';
 import { Radar } from '@/components/Radar';
+import { useSessionSeries, AnalyticsRow, ActivityTimeline } from '@/components/Charts';
 
 export default function OverviewPage() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
@@ -41,6 +42,9 @@ export default function OverviewPage() {
     };
   }, []);
 
+  // Hook must run before any early return (rules of hooks).
+  const series = useSessionSeries(status);
+
   async function toggleKillSwitch() {
     if (!status) return;
     await api.setKillSwitch(!status.killSwitch);
@@ -75,7 +79,7 @@ export default function OverviewPage() {
           <Radar size={300} />
         </div>
         <div className="relative max-w-2xl">
-          <div className="eyebrow">Built for Cesar · Powered by real-time market data</div>
+          <div className="eyebrow">NATHAN-I · Built for Cesar · Powered by real-time market data</div>
           <h1 className="mt-4 text-[44px] font-extrabold uppercase leading-[0.95] tracking-tight md:text-hero">
             Live Arbitrage
             <br />
@@ -138,6 +142,12 @@ export default function OverviewPage() {
           sub={status ? `min edge ${fmtPct(status.limits.minSpreadPct)}` : undefined}
         />
       </section>
+
+      {/* ── Activity timeline (large graph) ────────────────── */}
+      <ActivityTimeline series={series} />
+
+      {/* ── Analytics suite ────────────────────────────────── */}
+      <AnalyticsRow series={series} status={status} candidates={candidates} />
 
       {/* ── Pipeline ───────────────────────────────────────── */}
       <section className="card">
