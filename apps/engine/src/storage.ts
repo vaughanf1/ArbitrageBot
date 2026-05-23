@@ -12,9 +12,25 @@ import type { Opportunity, RiskLimits, Trade } from '@cesar-arb/shared';
 export class Storage {
   private readonly db: Database.Database;
 
+  /**
+   * Cap on retained `opportunities` rows. The engine inserts a fresh row for
+   * every candidate on every scan tick (IDs are timestamp-unique), so the
+   * table grows without bound unless pruned. Left unbounded it filled the
+   * Railway volume and crashed the engine on boot. 5000 rows is far more than
+   * the dashboard ever reads (50–100) and stays well under a few MB.
+   */
+  private readonly MAX_OPPORTUNITIES = 5000;
+  /** Run the prune sweep once every N opportunity writes (cheap amortised cost). */
+  private readonly PRUNE_EVERY = 500;
+  private writesSincePrune = 0;
+
   constructor(path: string) {
     mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
+    // Return freed pages to the OS as rows are pruned, so the file shrinks
+    // instead of only ever growing. Must be set before any table exists to
+    // take effect without a full VACUUM — true for a fresh volume.
+    this.db.pragma('auto_vacuum = FULL');
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS opportunities (
@@ -79,6 +95,10 @@ export class Storage {
       this.db.exec(`ALTER TABLE opportunities ADD COLUMN requires_review INTEGER NOT NULL DEFAULT 0`);
     }
     this.db.exec(`CREATE INDEX IF NOT EXISTS idx_opp_tradable_detected ON opportunities(tradable, detected_at DESC)`);
+
+    // Bound any pre-existing table on boot (e.g. a volume that filled before
+    // pruning shipped). No-op on a fresh DB.
+    this.pruneOpportunities();
   }
 
   recordOpportunity(o: Opportunity, tradable: boolean = true): void {
@@ -105,6 +125,28 @@ export class Storage {
         o.source,
         o.requiresReview ? 1 : 0,
       );
+    if (++this.writesSincePrune >= this.PRUNE_EVERY) {
+      this.writesSincePrune = 0;
+      this.pruneOpportunities();
+    }
+  }
+
+  /**
+   * Delete all but the most recent `keep` opportunities so the table can't
+   * grow without bound. With auto_vacuum=FULL the freed pages are returned to
+   * the OS, keeping the DB file (and the Railway volume) small. Returns the
+   * number of rows removed.
+   */
+  pruneOpportunities(keep: number = this.MAX_OPPORTUNITIES): number {
+    const res = this.db
+      .prepare(
+        `DELETE FROM opportunities
+         WHERE id NOT IN (
+           SELECT id FROM opportunities ORDER BY detected_at DESC LIMIT ?
+         )`,
+      )
+      .run(keep);
+    return res.changes;
   }
 
   /** Wipe trades + daily state. Used after the un-deduped run inflated the demo numbers. */
