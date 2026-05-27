@@ -21,10 +21,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
           <div className="relative z-10">
             <Nav />
-            <main className="mx-auto max-w-[1180px] px-4 py-8 md:px-8 md:py-10">
+            <main className="mx-auto max-w-[1640px] px-4 py-6 md:px-8 md:py-7">
               {children}
             </main>
-            <footer className="mx-auto max-w-[1180px] px-4 pb-10 md:px-8">
+            <footer className="mx-auto max-w-[1640px] px-4 pb-8 md:px-8">
               <div className="hairline flex flex-col gap-2 pt-5 text-[11px] uppercase tracking-[0.18em] text-ink-subtle sm:flex-row sm:items-center sm:justify-between">
                 <span>NATHAN-I · Institutional arbitrage infrastructure · Paper mode</span>
                 <span>BitGet · Polymarket · Kalshi</span>

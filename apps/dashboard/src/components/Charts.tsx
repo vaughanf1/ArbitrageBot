@@ -339,7 +339,7 @@ export function AnalyticsRow({
     }));
 
   return (
-    <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+    <section className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <ChartCard
         title="Cumulative P&L"
         figure={fmtUsd(pnl, { signed: true })}
@@ -397,6 +397,7 @@ export function ActivityTimeline({ series }: { series: Sample[] }) {
           </span>
         </div>
         <MultiLine
+          height={150}
           series={[
             { label: 'Candidates evaluated', stroke: '#5682F5', values: series.map((s) => s.candidates) },
             { label: 'Tradable signals', stroke: '#7FA6F5', values: series.map((s) => s.scanned) },

@@ -30,7 +30,7 @@ export function Nav() {
 
   return (
     <header className="sticky top-0 z-20 border-b border-line bg-bg/70 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-[1180px] items-center justify-between gap-4 px-4 py-3 md:px-8">
+      <div className="mx-auto flex max-w-[1640px] items-center justify-between gap-4 px-4 py-3 md:px-8">
         <Link href="/" className="flex items-center gap-3">
           <span className="relative grid h-8 w-8 place-items-center rounded-md bg-accent-dim">
             <span className="block h-3 w-3 rotate-45 bg-accent" style={{ boxShadow: '0 0 12px rgba(201,162,75,0.7)' }} />

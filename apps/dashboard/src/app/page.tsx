@@ -76,23 +76,27 @@ export default function CommandPage() {
   const venueCount = status ? Object.keys(status.marketCounts).length : 0;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {/* ── Status bar: the only numbers that matter at a glance ───── */}
-      <section className="flex flex-wrap items-center gap-x-8 gap-y-4 rounded-card border border-line bg-bg-card px-6 py-5">
+      <section className="flex flex-wrap items-center gap-x-8 gap-y-3 rounded-card border border-line bg-bg-card px-5 py-4">
         <div>
           <div className="stat-label">P&amp;L Today</div>
-          <div className={`mt-1 text-3xl font-semibold tabular-nums ${pnl >= 0 ? 'text-accent' : 'text-danger'}`}>
+          <div className={`mt-0.5 text-2xl font-semibold tabular-nums ${pnl >= 0 ? 'text-accent' : 'text-danger'}`}>
             {status ? fmtUsd(pnl, { signed: true }) : '—'}
           </div>
         </div>
         <div>
           <div className="stat-label">Exposure</div>
-          <div className="mt-1 text-xl font-semibold tabular-nums text-ink">
+          <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">
             {status ? fmtUsd(status.exposureTodayUsd) : '—'}
             <span className="ml-1 text-sm text-ink-subtle">
               / {status ? fmtUsd(status.limits.maxDailyExposureUsd) : '—'}
             </span>
           </div>
+        </div>
+        <div>
+          <div className="stat-label">Venues live</div>
+          <div className="mt-0.5 text-lg font-semibold tabular-nums text-ink">{venueCount || '—'}</div>
         </div>
         <div className="ml-auto flex items-center gap-3">
           <span className={status?.running ? 'pill-ok' : 'pill-mute'}>
@@ -105,103 +109,107 @@ export default function CommandPage() {
         </div>
       </section>
 
-      {/* ── THE list: positions to enter ──────────────────────────── */}
-      <section>
-        <div className="mb-4 flex items-baseline justify-between">
-          <h1 className="text-h1 font-extrabold uppercase tracking-tight">
-            Positions to enter
-          </h1>
-          <span className="pill-gold">{positions.length}</span>
-        </div>
+      {/* ── Command deck: actions on the left, live analytics filling the
+           right side that used to be empty margin ─────────────────────── */}
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-12">
+        {/* LEFT — what to act on */}
+        <div className="space-y-5 xl:col-span-7">
+          <section>
+            <div className="mb-3 flex items-baseline justify-between">
+              <h1 className="text-h1 font-extrabold uppercase tracking-tight">Positions to enter</h1>
+              <span className="pill-gold">{positions.length}</span>
+            </div>
 
-        {positions.length === 0 ? (
-          <div className="card text-center">
-            <div className="text-lg font-semibold text-ink">No position to enter right now</div>
-            <p className="mx-auto mt-2 max-w-md text-sm text-ink-muted">
-              Markets are efficient — nothing clears your {fmtPct(minSpread)} threshold.
-              NATHAN-I is scanning {venueCount} venues and will surface a position
-              here the instant one does. This is normal, not a fault.
-            </p>
-            {nearest && (
-              <div className="mx-auto mt-5 max-w-md rounded-lg border border-line bg-white/[0.02] px-4 py-3 text-left">
-                <div className="text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
-                  Closest so far · not yet tradable
-                </div>
-                <div className="mt-1 text-sm text-ink">{nearest.description}</div>
-                <div className="mt-1 text-xs text-ink-muted">
-                  {fmtPct(nearest.edgePct)} edge — needs {fmtPct(minSpread)} to enter
-                </div>
+            {positions.length === 0 ? (
+              <div className="card text-center">
+                <div className="text-lg font-semibold text-ink">No position to enter right now</div>
+                <p className="mx-auto mt-2 max-w-md text-sm text-ink-muted">
+                  Markets are efficient — nothing clears your {fmtPct(minSpread)} threshold.
+                  NATHAN-I is scanning {venueCount} venues and will surface a position
+                  here the instant one does. This is normal, not a fault.
+                </p>
+                {nearest && (
+                  <div className="mx-auto mt-5 max-w-md rounded-lg border border-line bg-white/[0.02] px-4 py-3 text-left">
+                    <div className="text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
+                      Closest so far · not yet tradable
+                    </div>
+                    <div className="mt-1 text-sm text-ink">{nearest.description}</div>
+                    <div className="mt-1 text-xs text-ink-muted">
+                      {fmtPct(nearest.edgePct)} edge — needs {fmtPct(minSpread)} to enter
+                    </div>
+                  </div>
+                )}
               </div>
+            ) : (
+              <ul className="space-y-3">
+                {positions.map((o) => (
+                  <PositionCard key={o.id} o={o} />
+                ))}
+              </ul>
+            )}
+
+            {reviewCount > 0 && (
+              <p className="mt-3 text-xs text-ink-subtle">
+                {reviewCount} cross-venue match{reviewCount === 1 ? '' : 'es'} flagged for manual
+                review — see the <a href="/opportunities" className="text-accent hover:text-accent-hover">Signals</a> tab.
+                Never auto-entered.
+              </p>
+            )}
+          </section>
+
+          {/* Recent trades — kept beside the action list, not below the fold */}
+          <div className="card">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="panel-title">Recent trades</h3>
+              <a href="/trades" className="text-xs font-semibold uppercase tracking-[0.14em] text-accent hover:text-accent-hover">
+                View all →
+              </a>
+            </div>
+            {trades.length === 0 ? (
+              <p className="text-sm text-ink-muted">No trades yet.</p>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="text-left text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
+                  <tr>
+                    <th className="py-2">Time</th>
+                    <th>Strategy</th>
+                    <th className="text-right">Notional</th>
+                    <th className="text-right">P&amp;L</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {trades.slice(0, 6).map((t) => (
+                    <tr key={t.id}>
+                      <td className="py-2 tabular-nums">{fmtTime(t.openedAt)}</td>
+                      <td>{t.strategy}</td>
+                      <td className="text-right tabular-nums">{fmtUsd(t.notionalUsd)}</td>
+                      <td className={`text-right font-semibold tabular-nums ${(t.pnlUsd ?? 0) >= 0 ? 'text-accent' : 'text-danger'}`}>
+                        {t.pnlUsd === null ? '—' : fmtUsd(t.pnlUsd, { signed: true })}
+                      </td>
+                      <td>
+                        <span className={statusPill(t.status)}>{t.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
-        ) : (
-          <ul className="space-y-3">
-            {positions.map((o) => (
-              <PositionCard key={o.id} o={o} />
-            ))}
-          </ul>
-        )}
-
-        {reviewCount > 0 && (
-          <p className="mt-3 text-xs text-ink-subtle">
-            {reviewCount} cross-venue match{reviewCount === 1 ? '' : 'es'} flagged for manual
-            review — see the <a href="/opportunities" className="text-accent hover:text-accent-hover">Signals</a> tab.
-            Never auto-entered.
-          </p>
-        )}
-      </section>
-
-      {/* ── Everything below here is secondary analysis ───────────── */}
-      <section className="space-y-6 border-t border-line pt-8">
-        <div className="flex items-center gap-3">
-          <h2 className="panel-title">Analysis</h2>
-          <span className="text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
-            reference only — you don&apos;t need this to act
-          </span>
         </div>
 
-        <ActivityTimeline series={series} />
-        <AnalyticsRow series={series} status={status} candidates={candidates} />
-
-        <div className="card">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="panel-title">Recent trades</h3>
-            <a href="/trades" className="text-xs font-semibold uppercase tracking-[0.14em] text-accent hover:text-accent-hover">
-              View all →
-            </a>
+        {/* RIGHT — live analytics, pulled up into the former empty space */}
+        <aside className="space-y-4 xl:col-span-5">
+          <div className="flex items-center gap-3">
+            <h2 className="panel-title">Live analytics</h2>
+            <span className="text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
+              reference only — you don&apos;t need this to act
+            </span>
           </div>
-          {trades.length === 0 ? (
-            <p className="text-sm text-ink-muted">No trades yet.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="text-left text-[11px] uppercase tracking-[0.16em] text-ink-subtle">
-                <tr>
-                  <th className="py-2">Time</th>
-                  <th>Strategy</th>
-                  <th className="text-right">Notional</th>
-                  <th className="text-right">P&amp;L</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {trades.slice(0, 8).map((t) => (
-                  <tr key={t.id}>
-                    <td className="py-2 tabular-nums">{fmtTime(t.openedAt)}</td>
-                    <td>{t.strategy}</td>
-                    <td className="text-right tabular-nums">{fmtUsd(t.notionalUsd)}</td>
-                    <td className={`text-right font-semibold tabular-nums ${(t.pnlUsd ?? 0) >= 0 ? 'text-accent' : 'text-danger'}`}>
-                      {t.pnlUsd === null ? '—' : fmtUsd(t.pnlUsd, { signed: true })}
-                    </td>
-                    <td>
-                      <span className={statusPill(t.status)}>{t.status}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </section>
+          <ActivityTimeline series={series} />
+          <AnalyticsRow series={series} status={status} candidates={candidates} />
+        </aside>
+      </div>
     </div>
   );
 }

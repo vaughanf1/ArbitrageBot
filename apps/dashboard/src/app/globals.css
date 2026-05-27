@@ -28,7 +28,7 @@
   }
   /* Blue gradient analytics surface — the graph panels from the mockup. */
   .chart-card {
-    @apply relative overflow-hidden rounded-card p-5 border border-line;
+    @apply relative overflow-hidden rounded-card p-4 border border-line;
     background:
       radial-gradient(120% 120% at 15% 0%, rgba(86, 130, 245, 0.30), transparent 55%),
       linear-gradient(160deg, #1B2C54 0%, #122039 55%, #0C1322 100%);
