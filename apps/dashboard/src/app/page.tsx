@@ -70,7 +70,7 @@ export default function CommandPage() {
   const exposurePct = status && cap > 0 ? (status.exposureTodayUsd / cap) * 100 : 0;
 
   return (
-    <div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1">
+    <div className="flex flex-col gap-3 lg:h-[calc(100vh-9.5rem)] lg:overflow-hidden">
       {/* ── 1 · Live ticker strip ──────────────────────────────────── */}
       <section className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1.5 rounded-card border border-line bg-bg-card/80 px-4 py-2 text-[11px] uppercase tracking-[0.14em]">
         <Tick label="Mode" value={status?.mode ?? '—'} tone="gold" />
@@ -93,7 +93,7 @@ export default function CommandPage() {
       </section>
 
       {/* ── 2 · KPI row ────────────────────────────────────────────── */}
-      <section className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+      <section className="grid shrink-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Kpi label="P&L Today" value={status ? fmtUsd(pnl, { signed: true }) : '—'} sub="booked · paper" tone={pnl >= 0 ? 'gold' : 'neg'} />
         <Kpi label="Exposure" value={status ? fmtUsd(status.exposureTodayUsd) : '—'} sub={status ? `${exposurePct.toFixed(0)}% of ${fmtUsd(cap)} cap` : '—'} />
         <Kpi label="Positions to enter" value={String(positions.length)} sub={`clear ${fmtPct(minSpread)} edge`} tone="gold" />
@@ -163,7 +163,7 @@ export default function CommandPage() {
         </section>
 
         {/* RIGHT — system status / action hub */}
-        <aside className="card flex min-h-0 flex-col lg:col-span-3">
+        <aside className="card flex min-h-0 flex-col overflow-y-auto lg:col-span-3">
           <div className="flex shrink-0 items-center justify-between">
             <h2 className="panel-title">System status</h2>
             <span className={status?.running ? 'pill-ok' : 'pill-mute'}>{status?.running ? '● Live' : '○ Idle'}</span>
@@ -180,7 +180,7 @@ export default function CommandPage() {
           <button onClick={toggleKillSwitch} className={`mt-4 w-full ${status?.killSwitch ? 'btn-primary' : 'btn-danger'}`}>
             {status?.killSwitch ? 'Resume trading' : 'Kill switch'}
           </button>
-          <div className="mt-auto pt-4">
+          <div className="pt-4">
             <div className="text-[11px] uppercase tracking-[0.16em] text-ink-subtle">P&L · session</div>
             <Sparkline values={series.map((s) => s.pnl)} stroke="#C9A24B" height={44} />
           </div>
