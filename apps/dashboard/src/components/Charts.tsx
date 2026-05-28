@@ -62,7 +62,7 @@ export function useSessionSeries(status: EngineStatus | null): Sample[] {
 
 /* ── Primitives ──────────────────────────────────────────────────────── */
 
-function Sparkline({
+export function Sparkline({
   values,
   stroke = GOLD,
   height = 56,
@@ -383,6 +383,64 @@ export function AnalyticsRow({
         <Sparkline values={series.map((s) => s.exposure)} stroke={BLUE} />
       </ChartCard>
     </section>
+  );
+}
+
+/**
+ * Compact signals column for the single-screen Command deck: edge
+ * distribution on top, strategy + venue mix below. Sized to sit inside a
+ * fixed-height grid cell without forcing the page to scroll.
+ */
+export function SignalsPanel({
+  status,
+  candidates,
+}: {
+  status: EngineStatus | null;
+  candidates: Opportunity[];
+}) {
+  const byStrategy = [
+    { label: 'Cross-exchange', value: candidates.filter((c) => c.strategy === 'cross-exchange').length, color: '#5682F5' },
+    { label: 'Prediction-pair', value: candidates.filter((c) => c.strategy === 'prediction-pair').length, color: '#7FA6F5' },
+    { label: 'Triangular', value: candidates.filter((c) => c.strategy === 'triangular').length, color: GOLD },
+  ];
+  const VENUE_PALETTE = ['#5682F5', '#7FA6F5', '#9CC0FF', '#3E63C8', '#C9A24B', '#E3BE6A', '#6E8FE8', '#B98F3C'];
+  const venueSlices = Object.entries(status?.marketCounts ?? {})
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, value], i) => ({
+      label: label.charAt(0).toUpperCase() + label.slice(1),
+      value,
+      color: VENUE_PALETTE[i % VENUE_PALETTE.length] as string,
+    }));
+
+  return (
+    <div className="flex min-h-0 flex-col gap-3">
+      <div className="chart-card">
+        <div className="relative z-10">
+          <div className="flex items-baseline justify-between">
+            <span className="chart-title">Edge distribution</span>
+            <span className="text-[11px] uppercase tracking-[0.14em] text-ink-subtle">{candidates.length} signals</span>
+          </div>
+          <div className="mt-3">
+            <Histogram edges={candidates.map((c) => c.edgePct)} minSpread={status?.limits.minSpreadPct ?? 1} />
+          </div>
+        </div>
+      </div>
+      <div className="grid min-h-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="chart-card">
+          <div className="relative z-10">
+            <span className="chart-title">By strategy</span>
+            <div className="mt-3"><Donut slices={byStrategy} /></div>
+          </div>
+        </div>
+        <div className="chart-card">
+          <div className="relative z-10">
+            <span className="chart-title">By venue</span>
+            <div className="mt-3"><Donut slices={venueSlices} /></div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
