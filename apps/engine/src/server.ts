@@ -14,6 +14,24 @@ export async function createServer(opts: {
   const fastify = Fastify({ loggerInstance: opts.logger });
   await fastify.register(cors, { origin: true });
 
+  /**
+   * Control-plane auth. Mutating endpoints (limits, start/stop, kill-switch
+   * OFF) require the `x-control-token` header to match CONTROL_TOKEN. This is
+   * fail-closed: if CONTROL_TOKEN is not configured, mutations are rejected —
+   * with real money behind these endpoints, "forgot to set the token" must
+   * mean locked, not open. Reads stay public; ENGAGING the kill switch is
+   * also deliberately left open (never gate the emergency stop).
+   */
+  function controlAuthError(req: { headers: Record<string, unknown> }):
+    | { code: number; error: string }
+    | null {
+    const token = process.env.CONTROL_TOKEN;
+    if (!token) return { code: 403, error: 'CONTROL_TOKEN not configured — controls are locked' };
+    const provided = (req.headers['x-control-token'] as string | undefined) ?? '';
+    if (provided !== token) return { code: 403, error: 'bad control token' };
+    return null;
+  }
+
   fastify.get('/health', async () => ({ ok: true, ts: Date.now() }));
 
   fastify.get('/api/status', async () => opts.engine.status());
@@ -35,18 +53,32 @@ export async function createServer(opts: {
     return { trades: opts.storage.recentTrades(isFinite(limit) ? limit : 100) };
   });
 
-  fastify.post('/api/kill-switch', async (req) => {
+  fastify.post('/api/kill-switch', async (req, reply) => {
     const { active } = req.body as { active: boolean };
+    // Engaging the kill switch needs no token — anyone may hit the emergency
+    // stop. Only DISENGAGING (resuming trading) is authenticated.
+    if (!active) {
+      const err = controlAuthError(req);
+      if (err) {
+        reply.code(err.code);
+        return { ok: false, error: err.error };
+      }
+    }
     opts.engine.setKillSwitch(Boolean(active));
     return { ok: true, killSwitch: Boolean(active) };
   });
 
   /**
    * Update Cesar's risk limits at runtime. Accepts a partial — only the
-   * fields sent are changed. Open like the kill-switch / start-stop
-   * controls (non-destructive in paper mode); the engine sanitises input.
+   * fields sent are changed. Token-gated: these numbers size real orders.
+   * The engine sanitises input.
    */
-  fastify.post('/api/limits', async (req) => {
+  fastify.post('/api/limits', async (req, reply) => {
+    const authErr = controlAuthError(req);
+    if (authErr) {
+      reply.code(authErr.code);
+      return { ok: false, error: authErr.error };
+    }
     const body = (req.body ?? {}) as Partial<{
       maxTradeSizeUsd: number;
       maxDailyExposureUsd: number;
@@ -71,12 +103,22 @@ export async function createServer(opts: {
     return { ok: true, limits };
   });
 
-  fastify.post('/api/start', async () => {
+  fastify.post('/api/start', async (req, reply) => {
+    const err = controlAuthError(req);
+    if (err) {
+      reply.code(err.code);
+      return { ok: false, error: err.error };
+    }
     await opts.engine.start();
     return { ok: true };
   });
 
-  fastify.post('/api/stop', async () => {
+  fastify.post('/api/stop', async (req, reply) => {
+    const err = controlAuthError(req);
+    if (err) {
+      reply.code(err.code);
+      return { ok: false, error: err.error };
+    }
     await opts.engine.stop();
     return { ok: true };
   });

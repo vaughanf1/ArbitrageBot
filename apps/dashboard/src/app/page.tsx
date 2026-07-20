@@ -42,8 +42,14 @@ export default function CommandPage() {
 
   async function toggleKillSwitch() {
     if (!status) return;
-    await api.setKillSwitch(!status.killSwitch);
-    setStatus(await api.status());
+    try {
+      await api.setKillSwitch(!status.killSwitch);
+      setStatus(await api.status());
+    } catch (e) {
+      // Engaging is always allowed; resuming needs the control token
+      // (Controls page). Surface the reason instead of failing silently.
+      window.alert((e as Error).message);
+    }
   }
 
   if (error && !status) {

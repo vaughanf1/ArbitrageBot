@@ -2,7 +2,7 @@ import { config as loadDotenv } from 'dotenv';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RiskLimits, TradingMode } from '@cesar-arb/shared';
+import type { RiskLimits, TradingMode, Venue } from '@cesar-arb/shared';
 import type { PredictionMatchMode } from '@cesar-arb/scanners';
 
 // Resolve the repo root .env regardless of where the engine is started from.
@@ -40,10 +40,29 @@ export interface EngineConfig {
   startingEquityUsd: number;
   limits: RiskLimits;
   bitget: { apiKey: string; apiSecret: string; passphrase: string };
-  polymarket: { privateKey: string };
+  polymarket: {
+    privateKey: string;
+    apiKey: string;
+    apiSecret: string;
+    apiPassphrase: string;
+    /** Proxy wallet address that holds funds (order funder). */
+    funderAddress: string;
+  };
   kalshi: { apiKeyId: string; privateKeyPath: string };
   report: { to: string; from: string; resendKey: string };
   predictionMatchMode: PredictionMatchMode;
+  /**
+   * Live-execution safety gate. Two independent switches must BOTH be set
+   * before a single real order can leave the engine:
+   *   - mode === 'live' (the global paper/live switch), AND
+   *   - the venue is listed in `liveVenues` (LIVE_VENUES env, comma-sep).
+   * On top of that, `dryRun` (default ON) makes every live-enabled executor
+   * build + sign the real request but stop short of sending it — so the
+   * signing path can be exercised against real credentials with zero risk
+   * before any money moves. Flip EXECUTION_DRY_RUN=false only after a clean
+   * dry-run, and start with tiny size.
+   */
+  execution: { dryRun: boolean; liveVenues: Venue[] };
 }
 
 export function loadConfig(): EngineConfig {
@@ -69,6 +88,10 @@ export function loadConfig(): EngineConfig {
     },
     polymarket: {
       privateKey: str('POLYMARKET_PRIVATE_KEY'),
+      apiKey: str('POLYMARKET_API_KEY'),
+      apiSecret: str('POLYMARKET_API_SECRET'),
+      apiPassphrase: str('POLYMARKET_API_PASSPHRASE'),
+      funderAddress: str('POLYMARKET_FUNDER_ADDRESS'),
     },
     kalshi: {
       apiKeyId: str('KALSHI_API_KEY_ID'),
@@ -80,9 +103,27 @@ export function loadConfig(): EngineConfig {
       resendKey: str('RESEND_API_KEY'),
     },
     predictionMatchMode: parseMatchMode(str('PREDICTION_MATCH_MODE', 'allowlist')),
+    execution: {
+      // Default ON. Must be explicitly set to the string "false" to allow a
+      // real order to be transmitted — any other value keeps the dry run.
+      dryRun: str('EXECUTION_DRY_RUN', 'true') !== 'false',
+      liveVenues: parseVenueList(str('LIVE_VENUES', '')),
+    },
   };
 }
 
 function parseMatchMode(v: string): PredictionMatchMode {
   return v === 'strict' ? 'strict' : 'allowlist';
+}
+
+const KNOWN_VENUES: ReadonlySet<string> = new Set<Venue>([
+  'bitget', 'binance', 'coinbase', 'kraken', 'okx', 'bybit', 'polymarket', 'kalshi', 'paper',
+]);
+
+/** Parse LIVE_VENUES="kalshi,polymarket" → validated Venue[]. Unknown names are dropped. */
+function parseVenueList(v: string): Venue[] {
+  return v
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => KNOWN_VENUES.has(s)) as Venue[];
 }

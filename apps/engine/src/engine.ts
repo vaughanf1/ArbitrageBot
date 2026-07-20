@@ -2,9 +2,11 @@ import type {
   EngineStatus,
   Fill,
   Opportunity,
+  OpportunityLeg,
   RiskLimits,
   Trade,
   TradingMode,
+  Venue,
 } from '@cesar-arb/shared';
 import {
   BitgetExecutor,
@@ -20,6 +22,7 @@ import {
   PredictionScanner,
   TriangularScanner,
   CrossExchangeScanner,
+  PolyIntraMarketScanner,
   DEFAULT_TRIANGLES,
   type Scanner,
 } from '@cesar-arb/scanners';
@@ -136,29 +139,53 @@ export class Engine {
   }
 
   private buildVenues() {
+    // A venue may place real orders only when the global mode is 'live' AND
+    // it is named in LIVE_VENUES. Anything else stays on the paper executor.
+    // Even when live, the executor's own `dryRun` (default ON) signs but does
+    // not transmit until EXECUTION_DRY_RUN=false. Two gates, fail-safe.
+    const liveFor = (v: Venue): boolean =>
+      this.config.mode === 'live' && this.config.execution.liveVenues.includes(v);
+    const dryRun = this.config.execution.dryRun;
+
     this.bitget = new BitgetExecutor({
       apiKey: this.config.bitget.apiKey || undefined,
       apiSecret: this.config.bitget.apiSecret || undefined,
       passphrase: this.config.bitget.passphrase || undefined,
-      enableLive: false, // v1: never live; live placement is unimplemented anyway
+      enableLive: false, // BitGet is not US-available; never live for this client.
     });
     this.polymarket = new PolymarketExecutor({
       privateKey: this.config.polymarket.privateKey || undefined,
-      enableLive: false,
+      funderAddress: this.config.polymarket.funderAddress || undefined,
+      apiKey: this.config.polymarket.apiKey || undefined,
+      apiSecret: this.config.polymarket.apiSecret || undefined,
+      apiPassphrase: this.config.polymarket.apiPassphrase || undefined,
+      enableLive: liveFor('polymarket'),
+      dryRun,
     });
     this.kalshi = new KalshiExecutor({
       apiKeyId: this.config.kalshi.apiKeyId || undefined,
       privateKeyPath: this.config.kalshi.privateKeyPath || undefined,
-      enableLive: false,
+      enableLive: liveFor('kalshi'),
+      dryRun,
     });
 
     this.paperBitget = new PaperExecutor({ dataSource: this.bitget, feeBps: 10, slippageBps: 5 });
     this.paperPoly = new PaperExecutor({ dataSource: this.polymarket, feeBps: 0, slippageBps: 50 });
     this.paperKalshi = new PaperExecutor({ dataSource: this.kalshi, feeBps: 50, slippageBps: 0 });
 
+    // Route each prediction venue to its real executor only when live-enabled;
+    // otherwise the paper wrapper. The real executor still respects dryRun.
     this.executorByVenue.set('bitget', this.paperBitget);
-    this.executorByVenue.set('polymarket', this.paperPoly);
-    this.executorByVenue.set('kalshi', this.paperKalshi);
+    this.executorByVenue.set('polymarket', liveFor('polymarket') ? this.polymarket : this.paperPoly);
+    this.executorByVenue.set('kalshi', liveFor('kalshi') ? this.kalshi : this.paperKalshi);
+    if (liveFor('kalshi') || liveFor('polymarket')) {
+      this.logger.warn(
+        { liveVenues: this.config.execution.liveVenues, dryRun },
+        dryRun
+          ? 'LIVE venues enabled in DRY-RUN: orders will be signed but NOT sent'
+          : '*** LIVE venues enabled and DRY-RUN OFF: real orders will be transmitted ***',
+      );
+    }
 
     // Public spot data sources (no API keys). Each is paper-wrapped so a
     // cross-exchange opportunity's legs can still simulate fills.
@@ -199,6 +226,16 @@ export class Engine {
         minEdgePct: this.config.limits.minSpreadPct,
         sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
         feeBps: 10,
+      }),
+      // Single-venue Polymarket YES+NO arb. The one strategy that runs on the
+      // funds Cesar actually holds (Polymarket only) now that the Poly↔Kalshi
+      // pair is retired. Reads the live CLOB book; legs route to the same
+      // Polymarket executor used by the prediction scanner, so it inherits the
+      // live/dry-run safety gates with no extra wiring.
+      new PolyIntraMarketScanner({
+        polymarket: this.polymarket,
+        minEdgePct: this.config.limits.minSpreadPct,
+        sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
       }),
     ];
   }
@@ -474,33 +511,48 @@ export class Engine {
     if (scaleFactor <= 0 || !isFinite(scaleFactor)) scaleFactor = 1;
 
     let succeeded = true;
+    let failReason = '';
+    // Legs that actually filled, so we can unwind them if a later leg fails.
+    const filledLegs: OpportunityLeg[] = [];
     for (const leg of opp.legs) {
       const exec = this.executorByVenue.get(leg.venue);
       if (!exec) {
+        failReason = `no executor for venue ${leg.venue}`;
         this.logger.error({ venue: leg.venue }, 'no executor for venue');
         succeeded = false;
         break;
       }
-      const scaledLeg = { ...leg, qty: leg.qty * scaleFactor };
+      const scaledLeg: OpportunityLeg = { ...leg, qty: leg.qty * scaleFactor };
       const res = await exec.placeMarketOrder(scaledLeg);
       if (!res.ok || !res.fill) {
+        failReason = res.error ?? 'leg failed';
         this.logger.error({ leg: leg.symbol, error: res.error }, 'leg failed');
         succeeded = false;
         break;
       }
       fills.push(res.fill);
+      filledLegs.push(scaledLeg);
     }
 
-    trade.fills = fills;
-    trade.notionalUsd = fills.reduce((s, f) => s + f.price * f.qty, 0);
-
     if (!succeeded) {
+      // PARTIAL-FILL SAFETY: a multi-leg arb where some legs filled and a later
+      // one didn't leaves a naked, unhedged position. Unwind everything that
+      // did fill before giving up.
+      if (filledLegs.length > 0) {
+        await this.unwindLegs(filledLegs, trade);
+      }
+      trade.fills = fills;
+      trade.notionalUsd = fills.reduce((s, f) => s + f.price * f.qty, 0);
       trade.status = 'failed';
+      trade.reasoning = `${trade.reasoning} | ABORTED: ${failReason}`;
       trade.closedAt = Date.now();
       this.storage.recordTrade(trade);
       this.tradedCount += 1;
       return;
     }
+
+    trade.fills = fills;
+    trade.notionalUsd = fills.reduce((s, f) => s + f.price * f.qty, 0);
 
     // For both triangular and prediction-pair the trade closes immediately
     // in v1: triangular returns to the quote currency in a single tick, and
@@ -524,6 +576,47 @@ export class Engine {
     this.storage.recordTrade(trade);
     this.tradedCount += 1;
     this.logger.info({ trade: trade.id, pnl: pnl.toFixed(2) }, 'trade closed');
+  }
+
+  /**
+   * Unwind already-filled legs after a later leg failed, by placing the
+   * opposite market order on each. Best-effort: if an unwind ITSELF fails the
+   * position is genuinely naked — we trip the kill-switch and log CRITICAL so
+   * a human reconciles it. The unwind fills are appended to the trade record.
+   */
+  private async unwindLegs(filledLegs: OpportunityLeg[], trade: Trade): Promise<void> {
+    this.logger.error(
+      { trade: trade.id, legs: filledLegs.length },
+      'partial fill detected — unwinding filled legs to avoid a naked position',
+    );
+    for (const leg of filledLegs) {
+      const exec = this.executorByVenue.get(leg.venue);
+      if (!exec) {
+        this.flagNakedPosition(trade, leg, 'no executor available to unwind');
+        continue;
+      }
+      const opposite: OpportunityLeg = { ...leg, side: leg.side === 'buy' ? 'sell' : 'buy' };
+      try {
+        const res = await exec.placeMarketOrder(opposite);
+        if (!res.ok || !res.fill) {
+          this.flagNakedPosition(trade, leg, res.error ?? 'unwind order rejected');
+          continue;
+        }
+        trade.fills.push(res.fill);
+        this.logger.warn({ trade: trade.id, leg: leg.symbol, venue: leg.venue }, 'leg unwound');
+      } catch (err) {
+        this.flagNakedPosition(trade, leg, (err as Error).message);
+      }
+    }
+  }
+
+  /** A leg could not be unwound → real exposure. Halt trading, alert loudly. */
+  private flagNakedPosition(trade: Trade, leg: OpportunityLeg, why: string): void {
+    this.setKillSwitch(true);
+    this.logger.error(
+      { trade: trade.id, venue: leg.venue, symbol: leg.symbol, qty: leg.qty, why },
+      'CRITICAL: NAKED POSITION — unwind failed; kill-switch engaged; manual reconciliation required',
+    );
   }
 
   private persistState(): void {

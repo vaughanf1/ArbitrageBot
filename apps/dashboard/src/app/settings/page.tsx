@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { EngineStatus, RiskLimits } from '@cesar-arb/shared';
-import { api } from '@/lib/api';
+import { api, getControlToken, setControlToken } from '@/lib/api';
 
 type FormKey = keyof RiskLimits;
 
@@ -20,7 +20,14 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [token, setToken] = useState('');
+  const [tokenSaved, setTokenSaved] = useState(false);
   const seeded = useRef(false);
+
+  // Seed the token field from localStorage (client-only).
+  useEffect(() => {
+    setToken(getControlToken());
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,6 +110,39 @@ export default function SettingsPage() {
         <div className="eyebrow">System controls</div>
         <h1 className="mt-2 text-h1 uppercase tracking-tight">Controls</h1>
       </header>
+
+      <section className="card">
+        <h2 className="panel-title mb-2">Control token</h2>
+        <p className="mb-4 text-sm text-ink-muted">
+          Changing limits, starting/stopping the engine, or resuming after a
+          kill requires the control token (the <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-accent">CONTROL_TOKEN</code>{' '}
+          value set in Railway). Paste it once — it stays in this browser only.
+          Hitting the kill switch never needs a token.
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder="Control token"
+            value={token}
+            onChange={(e) => {
+              setToken(e.target.value);
+              setTokenSaved(false);
+            }}
+            className="w-full max-w-sm rounded-lg border border-line bg-bg-elevated px-3 py-2.5 text-base text-ink outline-none focus:border-accent"
+          />
+          <button
+            onClick={() => {
+              setControlToken(token.trim());
+              setTokenSaved(true);
+            }}
+            className="btn-primary"
+          >
+            Save token
+          </button>
+          {tokenSaved && <span className="text-sm text-ok">✓ Saved in this browser</span>}
+        </div>
+      </section>
 
       <section className="card">
         <div className="mb-1 flex items-center justify-between">
@@ -194,11 +234,13 @@ export default function SettingsPage() {
       <section className="card">
         <h2 className="panel-title mb-2">Going live</h2>
         <p className="text-sm text-ink-muted">
-          v1 ships paper-only. To go live: (1) fund your exchange and
-          prediction-market accounts, (2) run{' '}
-          <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-accent">pnpm setup</code> to add API keys,
-          (3) set <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-accent">TRADING_MODE=live</code>, and
-          (4) wait at least one week of healthy paper-trade results before flipping the switch.
+          Live orders are held behind three switches in Railway:{' '}
+          <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-accent">TRADING_MODE=live</code>,{' '}
+          <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-accent">LIVE_VENUES=polymarket</code> and{' '}
+          <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-accent">EXECUTION_DRY_RUN=false</code>.
+          Keep dry-run ON until you have watched it validate real orders cleanly,
+          then start with a tiny max trade size. Full procedure:{' '}
+          <code className="rounded bg-white/[0.05] px-1.5 py-0.5 text-accent">GOING-LIVE-CHECKLIST.md</code> in the repo.
         </p>
       </section>
     </div>

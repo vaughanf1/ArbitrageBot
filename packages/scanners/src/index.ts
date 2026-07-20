@@ -8,3 +8,7 @@ export {
   type CrossExchangeScannerOptions,
 } from './cross-exchange.js';
 export { PREDICTION_PAIRS, type PredictionPair } from './prediction-pairs.js';
+export {
+  PolyIntraMarketScanner,
+  type PolyIntraMarketScannerOptions,
+} from './poly-intra-market.js';

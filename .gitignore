@@ -8,6 +8,11 @@ dist/
 .env.local
 .env.*.local
 
+# Secrets — API private keys, never commit. Live broker creds belong in Railway.
+secrets/
+*.pem
+*.key
+
 *.db
 *.sqlite
 *.sqlite-journal

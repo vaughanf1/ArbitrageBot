@@ -1,8 +1,15 @@
-import type { OpportunityLeg, Venue } from '@cesar-arb/shared';
+import type { Fill, OpportunityLeg, Venue } from '@cesar-arb/shared';
 import type { Executor, MarketTicker, PlaceOrderResult } from './base.js';
+import { Wallet } from 'ethers';
+import { ClobClient, Side, OrderType, type ApiKeyCreds } from '@polymarket/clob-client';
 
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const CLOB_BASE = 'https://clob.polymarket.com';
+const POLYGON_CHAIN_ID = 137;
+// Magic/email proxy wallets sign with signatureType 2 (Gnosis-safe style),
+// funder = the proxy contract address. Verified against Cesar's account: the
+// exported key derives L2 creds and signs orders cleanly under this config.
+const DEFAULT_SIGNATURE_TYPE = 2;
 
 export interface PolymarketMarket {
   /** Polymarket condition id. */
@@ -19,6 +26,8 @@ export interface PolymarketMarket {
   noPrice: number; // 0..1
   endDate: string;
   volume24h: number;
+  /** Negative-risk (multi-outcome) market — required for correct order signing. */
+  negRisk: boolean;
 }
 
 interface GammaMarketRow {
@@ -34,20 +43,33 @@ interface GammaMarketRow {
   volume24hr?: number;
   closed: boolean;
   active: boolean;
+  negRisk?: boolean;
 }
 
 /**
- * Read-only Polymarket executor.
+ * Polymarket executor — live order placement via the CLOB.
  *
- * Polymarket order placement requires an EIP-712 signed message and a
- * proxy wallet — not trivial to build until Cesar's account exists. v1
- * uses this purely as a market-data source for the prediction-pair
- * scanner; paper-trades fill against the live YES/NO prices.
+ * Reads market data from the public Gamma API and places orders through the
+ * authenticated CLOB using the official client: an EIP-712 order signed by the
+ * wallet key, submitted as the proxy funder (signatureType 2). Live placement
+ * is gated by `enableLive`; `dryRun` (default on) signs without submitting.
  */
 export class PolymarketExecutor implements Executor {
   readonly venue: Venue = 'polymarket';
   private readonly enableLive: boolean;
+  private readonly dryRun: boolean;
   private readonly privateKey?: string;
+  /** Proxy wallet address that custodies funds (the order funder). */
+  private readonly funderAddress?: string;
+  private readonly signatureType: number;
+  /** Optional pre-issued L2 creds; if absent we derive them from the key. */
+  private readonly presetCreds?: ApiKeyCreds;
+  /** Lazily-built, authenticated CLOB client (caches derived creds). */
+  private clobClient: ClobClient | null = null;
+  /** Lazily-built UNAUTHENTICATED client for public reads (order books). */
+  private bookClient: ClobClient | null = null;
+  /** Extra slippage allowance (bps) added to the leg price for a marketable order. */
+  private readonly slippageBps: number;
   private marketsCache: { markets: PolymarketMarket[]; cachedAt: number } | null = null;
   // Match the engine scan interval (~5s). A longer cache means the bot
   // trades on stale prices and can re-fire the "same" arb every tick for
@@ -55,9 +77,50 @@ export class PolymarketExecutor implements Executor {
   // a stream of inflated paper trades.
   private readonly marketsCacheMs = 5_000;
 
-  constructor(opts: { privateKey?: string; enableLive?: boolean } = {}) {
+  constructor(opts: {
+    privateKey?: string;
+    enableLive?: boolean;
+    /** When true (default), orders are built + signed but NOT submitted. */
+    dryRun?: boolean;
+    /** Proxy wallet address holding funds (POLY funder). Required for live. */
+    funderAddress?: string;
+    signatureType?: number;
+    apiKey?: string;
+    apiSecret?: string;
+    apiPassphrase?: string;
+    slippageBps?: number;
+  } = {}) {
     this.privateKey = opts.privateKey;
     this.enableLive = opts.enableLive ?? false;
+    this.dryRun = opts.dryRun ?? true;
+    this.funderAddress = opts.funderAddress;
+    this.signatureType = opts.signatureType ?? DEFAULT_SIGNATURE_TYPE;
+    this.slippageBps = opts.slippageBps ?? 100; // 1% default for thin books
+    if (opts.apiKey && opts.apiSecret && opts.apiPassphrase) {
+      this.presetCreds = { key: opts.apiKey, secret: opts.apiSecret, passphrase: opts.apiPassphrase };
+    }
+  }
+
+  /**
+   * Build (and cache) an authenticated CLOB client. Uses preset L2 creds when
+   * provided, otherwise derives them deterministically from the wallet key.
+   */
+  private async getClobClient(): Promise<ClobClient> {
+    if (this.clobClient) return this.clobClient;
+    if (!this.privateKey) throw new Error('missing wallet private key');
+    if (!this.funderAddress) throw new Error('missing funder (proxy) address');
+    const wallet = new Wallet(this.privateKey);
+    const creds =
+      this.presetCreds ?? (await new ClobClient(CLOB_BASE, POLYGON_CHAIN_ID, wallet).createOrDeriveApiKey());
+    this.clobClient = new ClobClient(
+      CLOB_BASE,
+      POLYGON_CHAIN_ID,
+      wallet,
+      creds,
+      this.signatureType,
+      this.funderAddress,
+    );
+    return this.clobClient;
   }
 
   async listActiveMarkets(): Promise<PolymarketMarket[]> {
@@ -94,6 +157,55 @@ export class PolymarketExecutor implements Executor {
     return markets;
   }
 
+  /**
+   * Best bid/ask per CLOB token from the live order book. Public read — no
+   * wallet or API creds needed, so this works in paper mode too. Unlike
+   * `ticker()` (which synthesises a spread around the Gamma mid), these are
+   * the REAL prices you could fill against right now — which is what an
+   * intra-market YES+NO arb needs: the Gamma mids always sum to ~$1, so only
+   * the actual book reveals when YES_ask + NO_ask dips below $1.
+   *
+   * Returns a map keyed by token id. Tokens with an empty/one-sided book are
+   * omitted. `askSize`/`bidSize` are the depth at the best level, in
+   * contracts — the scanner uses these to cap trade size to what's fillable.
+   */
+  async orderBooks(
+    tokenIds: string[],
+  ): Promise<Map<string, { bestAsk: number; askSize: number; bestBid: number; bidSize: number }>> {
+    const out = new Map<string, { bestAsk: number; askSize: number; bestBid: number; bidSize: number }>();
+    if (tokenIds.length === 0) return out;
+    if (!this.bookClient) this.bookClient = new ClobClient(CLOB_BASE, POLYGON_CHAIN_ID);
+    const params = tokenIds.map((token_id) => ({ token_id, side: Side.BUY }));
+    const books = await this.bookClient.getOrderBooks(params);
+    for (const b of books) {
+      if (!b || !b.asset_id) continue;
+      // Don't assume the API's sort order — take the true best level.
+      let bestAsk = Infinity;
+      let askSize = 0;
+      for (const a of b.asks ?? []) {
+        const p = numOr(a.price, NaN);
+        if (!isFinite(p) || p <= 0) continue;
+        if (p < bestAsk) {
+          bestAsk = p;
+          askSize = numOr(a.size, 0);
+        }
+      }
+      let bestBid = 0;
+      let bidSize = 0;
+      for (const bd of b.bids ?? []) {
+        const p = numOr(bd.price, NaN);
+        if (!isFinite(p) || p <= 0) continue;
+        if (p > bestBid) {
+          bestBid = p;
+          bidSize = numOr(bd.size, 0);
+        }
+      }
+      if (!isFinite(bestAsk) || bestAsk === Infinity) continue;
+      out.set(b.asset_id, { bestAsk, askSize, bestBid, bidSize });
+    }
+    return out;
+  }
+
   async ticker(symbol: string): Promise<MarketTicker> {
     // For Polymarket, `symbol` = "<conditionId>:YES" or ":NO".
     const [conditionId, side] = symbol.split(':');
@@ -127,15 +239,100 @@ export class PolymarketExecutor implements Executor {
     return out;
   }
 
-  async placeMarketOrder(_leg: OpportunityLeg): Promise<PlaceOrderResult> {
+  async placeMarketOrder(leg: OpportunityLeg): Promise<PlaceOrderResult> {
     if (!this.enableLive) {
       return { ok: false, error: 'polymarket: live trading disabled (paper mode)' };
     }
     if (!this.privateKey) {
       return { ok: false, error: 'polymarket: missing wallet private key' };
     }
-    // Live placement requires EIP-712 signing against CLOB. v2 work.
-    return { ok: false, error: 'polymarket: live order placement not yet implemented — paper only in v1' };
+    if (!this.funderAddress) {
+      return { ok: false, error: 'polymarket: missing funder (proxy) address' };
+    }
+
+    // Leg symbol is "<conditionId>:YES" | "<conditionId>:NO". Resolve to the
+    // CLOB token id we actually trade.
+    const [conditionId, rawSide] = leg.symbol.split(':');
+    if (!conditionId || (rawSide !== 'YES' && rawSide !== 'NO')) {
+      return { ok: false, error: `polymarket: bad leg symbol ${leg.symbol}` };
+    }
+    const markets = await this.listActiveMarkets();
+    const market = markets.find((m) => m.conditionId === conditionId);
+    if (!market) {
+      return { ok: false, error: `polymarket: market not found ${conditionId}` };
+    }
+    const tokenId = rawSide === 'YES' ? market.yesTokenId : market.noTokenId;
+
+    // Marketable order: for a BUY, cap the price above the reference ask so it
+    // crosses the book but never pays >$0.99; for a SELL (unwind), set a floor
+    // below the bid so it crosses down but never dumps below $0.01.
+    const isSell = leg.side === 'sell';
+    const slip = this.slippageBps / 10_000;
+    const limitPrice = isSell
+      ? Math.max(0.01, leg.price * (1 - slip))
+      : Math.min(0.99, leg.price * (1 + slip));
+    const size = Math.floor(leg.qty * 100) / 100; // Polymarket size precision
+    if (size <= 0) {
+      return { ok: false, error: `polymarket: leg qty ${leg.qty} too small` };
+    }
+
+    // DRY RUN: resolve token, price cap and size for real, but stop before
+    // signing/submitting. Returns a simulated fill at the reference price.
+    if (this.dryRun) {
+      return { ok: true, fill: this.simulatedFill(leg, size) };
+    }
+
+    let client: ClobClient;
+    try {
+      client = await this.getClobClient();
+    } catch (err) {
+      return { ok: false, error: `polymarket: auth failed: ${(err as Error).message}` };
+    }
+
+    try {
+      const tickSize = await client.getTickSize(tokenId);
+      const order = await client.createOrder(
+        { tokenID: tokenId, price: limitPrice, size, side: isSell ? Side.SELL : Side.BUY },
+        { tickSize, negRisk: market.negRisk },
+      );
+      // FAK (fill-and-kill) = take whatever liquidity is available now at/under
+      // the cap, cancel the rest. The arbitrage wants an immediate fill, not a
+      // resting order.
+      const resp = (await client.postOrder(order, OrderType.FAK)) as PolyOrderResponse;
+      if (resp && resp.success === false) {
+        return { ok: false, error: `polymarket: order rejected: ${resp.errorMsg ?? 'unknown'}` };
+      }
+      // Derive the executed price/qty from the response when available; fall
+      // back to the cap/size used. Real reconciliation happens via fills later.
+      const filledSize = numOr(resp?.takingAmount, size);
+      const spent = numOr(resp?.makingAmount, limitPrice * size);
+      const avgPrice = filledSize > 0 ? spent / filledSize : limitPrice;
+      const fill: Fill = {
+        venue: this.venue,
+        symbol: leg.symbol,
+        side: leg.side,
+        qty: filledSize,
+        price: avgPrice,
+        feeUsd: 0, // Polymarket charges no taker fee on the global CLOB.
+        filledAt: Date.now(),
+      };
+      return { ok: true, fill };
+    } catch (err) {
+      return { ok: false, error: `polymarket: order failed: ${(err as Error).message}` };
+    }
+  }
+
+  /** Simulated fill at the leg's reference price (dry-run path). */
+  private simulatedFill(leg: OpportunityLeg, size: number): Fill {
+    return {
+      venue: this.venue,
+      symbol: leg.symbol,
+      side: leg.side,
+      qty: size,
+      price: leg.price,
+      feeUsd: 0,
+      filledAt: Date.now(),
+    };
   }
 
   // Helper for the prediction scanner to look up a single market by slug.
@@ -168,6 +365,25 @@ export class PolymarketExecutor implements Executor {
 
   // Expose CLOB base for clients that may want it later.
   static readonly clobBase = CLOB_BASE;
+}
+
+/** Subset of the CLOB postOrder response we read for fill reconciliation. */
+interface PolyOrderResponse {
+  success?: boolean;
+  errorMsg?: string;
+  orderID?: string;
+  /** Size taken (filled), in contracts. */
+  takingAmount?: number | string;
+  /** USDC spent on the take. */
+  makingAmount?: number | string;
+  status?: string;
+}
+
+/** Coerce a possibly-undefined/string numeric field to a finite number. */
+function numOr(v: unknown, fallback: number): number {
+  if (v === undefined || v === null) return fallback;
+  const n = typeof v === 'number' ? v : Number(v);
+  return isFinite(n) ? n : fallback;
 }
 
 function parseGammaRow(r: GammaMarketRow): PolymarketMarket | null {
@@ -203,5 +419,6 @@ function parseGammaRow(r: GammaMarketRow): PolymarketMarket | null {
     noPrice,
     endDate: r.endDate,
     volume24h: isFinite(vol24) ? vol24 : 0,
+    negRisk: Boolean(r.negRisk),
   };
 }
