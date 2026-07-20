@@ -36,7 +36,21 @@ always safe.
 
 ## Stage 0 — prerequisites (once)
 
-- [ ] **Fund Polymarket**: USDC in your Polymarket account (start small: $200–500).
+> **Checked at handover (2026-07-20):** the account behind the wallet key holds
+> **$0 USDC with no exchange allowances** (confirmed via the Polymarket CLOB API).
+> Until it is funded, flipping every switch below produces exactly nothing —
+> funding is the first real blocker, and only Cesar can clear it.
+
+- [ ] **Verify the deployment is up**: the dashboard URL in this repo's history
+      returned 404 at handover. Open Cesar's Railway, confirm the engine +
+      dashboard services exist and are deployed from `vaughanf1/ArbitrageBot@main`,
+      and note the current public URLs.
+- [ ] **Fund Polymarket**: deposit USDC in the Polymarket app (start small:
+      $200–500). Trading through the app once also sets the exchange allowances.
+- [ ] **Confirm the funder address**: `POLYMARKET_FUNDER_ADDRESS` must be the
+      deposit/proxy address shown in your Polymarket profile — copy it fresh from
+      the app, don't trust old notes. A wrong funder is caught safely (the first
+      real order is rejected, nothing fills) but it will stall go-live.
 - [ ] **Rotate your wallet key**: the current key was shared over chat during the
       build. Export a fresh one at `reveal.magic.link/polymarket` *after* changing
       account credentials, or accept the risk knowingly (your call — it holds your
