@@ -1,109 +1,113 @@
-# NATHAN-I — What Cesar needs in place
+# Going live — runbook
 
-A practical checklist for the three stages: **testing → fine-tuning → going live.**
-Short version: **for testing and fine-tuning you need almost nothing — just a browser.**
-Real money ("going live") needs accounts + funding + a round of development work, and
-should not be rushed.
+**Status at handover (2026-07-20):** live order placement is **built, safety-gated,
+and verified up to (but not including) transmitting a real order.** The final switch
+is deliberately left to you, following the procedure below. Do not skip stages.
 
----
+## What the bot trades now
 
-## Stage 1 — Testing (you can do this today)
+One strategy: **single-market Polymarket arbitrage.** A binary market has a YES and
+a NO token; exactly one pays $1 at resolution. If YES + NO can be **bought together
+for less than $1**, the difference is locked-in profit with no prediction involved.
+The bot reads the live order book (not indicative prices), sizes to the depth
+actually available, and only fires when the combined cost is under $1 after fees.
 
-The bot is already deployed and running in **paper mode** (simulated trades on **real,
-live market data**). To watch and test it:
+**Set your expectations accordingly:** on liquid markets this window is rare —
+market makers keep YES+NO at or above $1.00 nearly all the time (at handover the
+tightest book across the top markets was $1.001). The bot's job is to be there in
+the seconds when someone leaves money on the table. It may find nothing for days.
+That is the market being efficient, not the bot being broken.
 
-| Item | Needed? | Notes |
+Kalshi and BitGet integrations remain in the code but are retired from live use.
+
+## The three switches
+
+A real order leaves the engine only when ALL THREE are set in Railway
+(engine service → Variables):
+
+| Variable | Live value | What it does |
 |---|---|---|
-| A web browser | ✅ Yes | That's it. The bot runs in the cloud (Railway). |
-| Any software installed on your computer | ❌ No | Nothing to install. Just open the dashboard link. |
-| Accounts / API keys at the exchanges | ❌ No | Scanning uses public market data; no keys required to test. |
-| Money on any exchange | ❌ No | Paper mode places no real orders. |
+| `TRADING_MODE` | `live` | Global paper/live switch |
+| `LIVE_VENUES` | `polymarket` | Only listed venues may trade for real |
+| `EXECUTION_DRY_RUN` | `false` | While `true` (default): orders are built and signed but **never sent** |
 
-**Dashboard:** https://dashboard-production-0d5f.up.railway.app/
+Anything else = simulation. If in doubt, set `EXECUTION_DRY_RUN=true` — that is
+always safe.
 
-> Important: the green "P&L" you see in paper mode is **simulated and booked at entry** —
-> it's a theoretical figure to show the engine is finding edges, **not** real earnings.
+## Stage 0 — prerequisites (once)
 
----
+- [ ] **Fund Polymarket**: USDC in your Polymarket account (start small: $200–500).
+- [ ] **Rotate your wallet key**: the current key was shared over chat during the
+      build. Export a fresh one at `reveal.magic.link/polymarket` *after* changing
+      account credentials, or accept the risk knowingly (your call — it holds your
+      trading funds).
+- [ ] **Railway engine variables set**:
+  - `POLYMARKET_PRIVATE_KEY` — exported wallet key
+  - `POLYMARKET_FUNDER_ADDRESS` — your proxy wallet address (Polymarket profile)
+  - `CONTROL_TOKEN` — a long random string (e.g. from a password generator).
+    Without it, limits/start/stop/resume are **locked** (kill switch always works).
+- [ ] **Dashboard**: Controls page → paste the same `CONTROL_TOKEN` value into the
+      Control token field → Save. This authorises your browser.
+- [ ] **Risk limits for the trial** (Controls page): Max trade size **$10**,
+      Max daily exposure **$50**, Min spread **0.5%**.
 
-## Stage 2 — Fine-tuning (also today, no accounts needed)
+## Stage 1 — dry run (mandatory, ≥ 1 trading day)
 
-This is about tuning *behaviour* before any real money. All done from the dashboard's
-**Controls** page — still no installs, no keys:
+Set `TRADING_MODE=live`, `LIVE_VENUES=polymarket`, keep `EXECUTION_DRY_RUN=true`.
 
-- **Risk limits** — max trade size, max daily exposure, max daily loss %, trailing stop.
-- **Minimum spread %** — how big an edge must be before it counts as a position to enter.
-- **Which markets to pair** — the Polymarket↔Kalshi prediction pairs are curated in an
-  allowlist; we extend/refine that list together as you decide which markets you trust.
-- Watch over several sessions, then we adjust thresholds based on what we see.
+The engine log (Railway → engine → Logs) will show:
+`LIVE venues enabled in DRY-RUN: orders will be signed but NOT sent`
 
-Optional in this stage:
+What you're verifying:
+- [ ] Engine runs without auth errors from Polymarket (a bad key/funder shows up here).
+- [ ] If an opportunity fires, the trade appears on the dashboard with both legs —
+      that entire path (market lookup, sizing, signing) ran against real credentials,
+      stopping only at transmission.
+- [ ] No crashes/restarts over the day.
 
-- **Daily email report** — if you want the end-of-day summary emailed, we need a
-  **Resend** account (free tier is fine) and a verified sender address. ~10 min to set up.
+## Stage 2 — first real money (supervised)
 
----
+Only after a clean Stage 1. **Do this while watching the dashboard and logs live.**
 
-## Stage 3 — Going live (real money) — requires prep + development
+1. Confirm limits: max trade size $10.
+2. Set `EXECUTION_DRY_RUN=false` in Railway (service restarts). The log line
+   changes to: `*** LIVE venues enabled and DRY-RUN OFF: real orders will be
+   transmitted ***`
+3. Wait for the first trade. Then **reconcile against Polymarket itself**: open
+   your Polymarket account and confirm you actually hold the YES and NO positions
+   the dashboard shows, at roughly the recorded prices.
+4. If anything looks wrong → hit the **kill switch** (dashboard, no token needed)
+   and set `EXECUTION_DRY_RUN=true`.
 
-**Be aware:** live order placement is **not built yet**. The engine currently *detects*
-real opportunities and *simulates* fills, but the code that actually sends orders to the
-exchanges is intentionally switched off and unimplemented (v1 is paper-only by design).
-So "going live" is a project with two parallel tracks:
+**What can go wrong, and what the bot does:**
+- *One leg fills, the other fails* (price moved): the bot automatically sells back
+  the filled leg. You lose the spread — cents at $10 size.
+- *The unwind itself fails*: kill switch trips automatically, a CRITICAL log line
+  is written, and the bot stops. You then close the position by hand in Polymarket.
 
-### A. What YOU (Cesar) need to procure
+## Stage 3 — scale (gradual)
 
-For each venue you want to trade live, you need an account, identity verification, funding,
-and API credentials:
+- [ ] 3–5 clean, reconciled fills at $10 before any increase.
+- [ ] Raise max trade size stepwise: $25 → $50 → $100. Reconcile at each step.
+- [ ] Raise daily exposure in proportion (5× trade size is a sane ratio).
 
-**Crypto — BitGet** (and/or the spot venues we scan: Binance, Bybit, OKX, Kraken, Coinbase)
-- [ ] Verified BitGet account (KYC complete)
-- [ ] Account funded with trading capital (USDT)
-- [ ] API key set: **API key + secret + passphrase** (create with *trade* permission, IP-restricted)
+## Controls reference
 
-**Prediction markets — Polymarket**
-- [ ] A crypto wallet (Polymarket settles on the Polygon network)
-- [ ] **USDC on Polygon** in that wallet for trading capital
-- [ ] Wallet **private key** + Polymarket API credentials (key / secret / passphrase)
-- [ ] Confirm you're eligible/allowed to trade Polymarket from your jurisdiction
+- **Kill switch (dashboard)** — halts all trading instantly. Never needs a token.
+  Resuming does.
+- **Limit changes / start / stop / resume** — need the control token (Controls page).
+- **`EXECUTION_DRY_RUN=true` in Railway** — the hard off-switch for real orders,
+  independent of everything else.
 
-**Prediction markets — Kalshi** (US-regulated exchange)
-- [ ] Verified Kalshi account (US-person KYC / eligibility)
-- [ ] Account funded (USD)
-- [ ] **API key ID** + the **RSA private key file** Kalshi issues you
+## Known limitations (accepted at handover)
 
-**Reporting / hosting (already mostly in place)**
-- [ ] Railway account — ✅ you already have this (the bot lives here)
-- [ ] Resend account for emailed reports — optional
-
-> You do **not** need anything installed on your personal computer for any of this.
-> Keys are pasted into the Railway dashboard (secure environment variables), not your laptop.
-> The only file is Kalshi's private key, which we store as a Railway secret.
-
-### B. What needs to be BUILT before live (development — my side)
-
-These are the gaps between "great paper demo" and "safe with real money":
-
-1. **Implement real order placement** for each venue (signed orders to BitGet, Polymarket
-   CLOB, Kalshi) — currently returns "not implemented."
-2. **Settlement / real P&L** — today P&L is booked at entry; live needs trades tracked to
-   actual resolution/close (the v2 accrual work).
-3. **Lock down the controls** — the kill-switch / limits / start-stop endpoints are currently
-   open (no auth). They must be authenticated before real money is exposed.
-4. **Live dry-run** — go live with tiny size first, reconcile every fill against the
-   exchange, then scale up.
-
-### Suggested order
-
-1. ✅ Test in paper (now) → 2. Fine-tune limits + market list (now) →
-3. Open + fund the exchange accounts (you, in parallel) →
-4. Build live execution + settlement + auth (me) →
-5. Live dry-run with small size → 6. Scale up.
-
----
-
-### TL;DR for Cesar
-- **To start testing & fine-tuning now:** nothing — just the browser + the dashboard link.
-- **To go live later:** funded + verified accounts at BitGet / Polymarket / Kalshi with API
-  keys, *plus* a development phase to turn on real trading safely. No software on your computer
-  either way.
+1. **P&L is booked at entry.** When a pair fills, the dashboard books the locked
+   edge immediately, but the **cash stays in Polymarket until the market resolves**
+   (possibly weeks/months). Dashboard P&L is locked value, not withdrawable cash.
+2. **No automated test suite.** The code is typechecked and was manually verified
+   end-to-end; regressions rely on the dry-run stage catching them.
+3. **Repo location**: code lives in `vaughanf1/ArbitrageBot` (Vaughan's GitHub);
+   Railway deploys from it. Transferring the repo to Cesar's GitHub is an open
+   handover item — everything else already runs in Cesar's Railway.
+4. **Read endpoints are public**: anyone with the engine URL can see status/trades
+   (not change anything). Acceptable for now; say the word if you want reads locked.
