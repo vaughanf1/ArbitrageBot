@@ -41,10 +41,16 @@ always safe.
 > Until it is funded, flipping every switch below produces exactly nothing —
 > funding is the first real blocker, and only Cesar can clear it.
 
-- [ ] **Verify the deployment is up**: the dashboard URL in this repo's history
-      returned 404 at handover. Open Cesar's Railway, confirm the engine +
-      dashboard services exist and are deployed from `vaughanf1/ArbitrageBot@main`,
-      and note the current public URLs.
+- [x] **Deployment is up** (redeployed fresh into Cesar's Railway, 2026-07-22 —
+      project `cesar-arb-bot`):
+      - Dashboard: https://dashboard-production-1fb7.up.railway.app
+      - Engine: https://engine-production-af7b.up.railway.app
+      - Engine runs in **paper mode** with `LIVE_VENUES=polymarket` and
+        `EXECUTION_DRY_RUN=true` pre-staged; `CONTROL_TOKEN` is set (Vaughan has
+        it). Going to Stage 1 = flip `TRADING_MODE` to `live` in Railway.
+      - Note: deployed via `railway up` from the local repo, not GitHub-linked.
+        To redeploy after code changes: `railway up --service engine` (and/or
+        `--service dashboard`) from the repo root, logged in as Cesar.
 - [ ] **Fund Polymarket**: deposit USDC in the Polymarket app (start small:
       $200–500). Trading through the app once also sets the exchange allowances.
 - [ ] **Confirm the funder address**: `POLYMARKET_FUNDER_ADDRESS` must be the
