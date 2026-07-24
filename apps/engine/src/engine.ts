@@ -549,8 +549,10 @@ export class Engine {
       // Label by how this trade ACTUALLY executed, not by the global mode.
       // In live mode the retired scanners (BitGet triangular, cross-exchange)
       // still route entirely to paper executors; recording those as 'live'
-      // would show Cesar simulated P&L as if it were real money.
-      mode: routing,
+      // would show Cesar simulated P&L as if it were real money. Same rule
+      // for EXECUTION_DRY_RUN: the live executor returns simulated fills, so
+      // no money moved and the record must say 'paper'.
+      mode: routing === 'live' && this.config.execution.dryRun ? 'paper' : routing,
       status: 'open',
       fills: [],
       notionalUsd: 0,
