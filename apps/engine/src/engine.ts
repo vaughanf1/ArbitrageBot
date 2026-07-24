@@ -82,6 +82,12 @@ export class Engine {
 
   private scanners: Scanner[] = [];
   private executorByVenue: Map<string, Executor> = new Map();
+  /**
+   * Venues actually wired to a real (money-moving) executor this run. Populated
+   * by buildVenues() at the exact point the real executor is chosen, so routing
+   * decisions can never drift from how orders are really sent.
+   */
+  private liveRoutedVenues: Set<string> = new Set();
 
   private guard: RiskGuard;
   private state: ReturnType<typeof freshState>;
@@ -178,6 +184,9 @@ export class Engine {
     this.executorByVenue.set('bitget', this.paperBitget);
     this.executorByVenue.set('polymarket', liveFor('polymarket') ? this.polymarket : this.paperPoly);
     this.executorByVenue.set('kalshi', liveFor('kalshi') ? this.kalshi : this.paperKalshi);
+    this.liveRoutedVenues = new Set(
+      (['polymarket', 'kalshi'] as Venue[]).filter((v) => liveFor(v)),
+    );
     if (liveFor('kalshi') || liveFor('polymarket')) {
       this.logger.warn(
         { liveVenues: this.config.execution.liveVenues, dryRun },
@@ -238,6 +247,33 @@ export class Engine {
         sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
       }),
     ];
+  }
+
+  /**
+   * How an opportunity's legs would ACTUALLY route right now:
+   *   'live'  — every leg goes to a real, money-moving executor
+   *   'paper' — every leg is simulated
+   *   'mixed' — some real, some simulated
+   *
+   * 'mixed' must never be traded. A cross-venue arb is only riskless because
+   * both legs exist; if one leg is real and the hedge is simulated, the client
+   * ends up holding a naked directional position while the dashboard books the
+   * "locked" edge as if it were hedged. The partial-fill unwind cannot save us
+   * here either — the paper leg always reports success, so nothing looks wrong.
+   *
+   * Concretely: with LIVE_VENUES=polymarket, a Polymarket↔Kalshi pair would buy
+   * one side for real and pretend to buy the other. That is the failure this
+   * gate exists to prevent.
+   */
+  private routingFor(opp: Opportunity): 'live' | 'paper' | 'mixed' {
+    let anyLive = false;
+    let anyPaper = false;
+    for (const leg of opp.legs) {
+      if (this.liveRoutedVenues.has(leg.venue)) anyLive = true;
+      else anyPaper = true;
+    }
+    if (anyLive && anyPaper) return 'mixed';
+    return anyLive ? 'live' : 'paper';
   }
 
   /** Start the scan loop. Returns immediately. */
@@ -429,6 +465,22 @@ export class Engine {
       // Try to execute the best tradable opportunity (if any).
       this.gcRecentFires();
       for (const opp of this.currentOpportunities) {
+        // Routing gate runs BEFORE risk limits: a half-real trade is unsafe at
+        // any size, so it must never depend on a limit being set correctly.
+        const routing = this.routingFor(opp);
+        if (routing === 'mixed') {
+          this.logger.warn(
+            {
+              opp: opp.id,
+              strategy: opp.strategy,
+              venues: opp.legs.map((l) => l.venue),
+              liveVenues: [...this.liveRoutedVenues],
+            },
+            'SKIPPED: opportunity spans live and simulated venues — one leg would be ' +
+              'real and its hedge fake. Enable every venue in LIVE_VENUES or none.',
+          );
+          continue;
+        }
         const decision = this.guard.evaluate(opp, this.state);
         if (!decision.allowed) {
           this.logger.debug({ opp: opp.id, reason: decision.reason }, 'skip');
@@ -441,7 +493,7 @@ export class Engine {
           continue;
         }
         this.recentFires.set(fp, Date.now());
-        await this.executeOpportunity(opp);
+        await this.executeOpportunity(opp, routing);
         break; // one trade per tick keeps things tidy in v1
       }
       this.persistState();
@@ -487,14 +539,18 @@ export class Engine {
     this.marketCounts = next;
   }
 
-  private async executeOpportunity(opp: Opportunity): Promise<void> {
+  private async executeOpportunity(opp: Opportunity, routing: 'live' | 'paper' = 'paper'): Promise<void> {
     const sizeUsd = this.guard.sizeFor(opp, this.state);
     const trade: Trade = {
       id: newTradeId(),
       opportunityId: opp.id,
       strategy: opp.strategy,
       assetClass: opp.assetClass,
-      mode: this.mode,
+      // Label by how this trade ACTUALLY executed, not by the global mode.
+      // In live mode the retired scanners (BitGet triangular, cross-exchange)
+      // still route entirely to paper executors; recording those as 'live'
+      // would show Cesar simulated P&L as if it were real money.
+      mode: routing,
       status: 'open',
       fills: [],
       notionalUsd: 0,

@@ -34,6 +34,24 @@ A real order leaves the engine only when ALL THREE are set in Railway
 Anything else = simulation. If in doubt, set `EXECUTION_DRY_RUN=true` — that is
 always safe.
 
+### Fourth gate: no half-real trades (added 2026-07-24)
+
+The engine refuses to auto-trade any opportunity whose legs span a live venue and
+a simulated one. This matters because the retired Polymarket↔Kalshi scanner still
+runs and still produces most of the opportunities you see on the dashboard: with
+`LIVE_VENUES=polymarket`, those pairs would otherwise buy the Polymarket leg with
+**real money** and simulate the Kalshi hedge — leaving a naked directional bet
+while the dashboard books it as a locked, riskless spread. The partial-fill
+unwind does not catch this, because the simulated leg always reports success.
+
+Blocked opportunities are logged as:
+`SKIPPED: opportunity spans live and simulated venues`
+
+Seeing these in the Stage 1 log is **correct behaviour**, not an error. In live
+mode the only strategy that can actually trade is the single-venue Polymarket
+YES+NO arb. Related: trades are now recorded with the mode they *actually*
+executed in, so paper fills can never appear as live P&L.
+
 ## Stage 0 — prerequisites (once)
 
 > **Checked at handover (2026-07-20):** the account behind the wallet key holds
@@ -57,10 +75,12 @@ always safe.
       deposit/proxy address shown in your Polymarket profile — copy it fresh from
       the app, don't trust old notes. A wrong funder is caught safely (the first
       real order is rejected, nothing fills) but it will stall go-live.
-- [ ] **Rotate your wallet key**: the current key was shared over chat during the
-      build. Export a fresh one at `reveal.magic.link/polymarket` *after* changing
-      account credentials, or accept the risk knowingly (your call — it holds your
-      trading funds).
+- [x] **Wallet key — risk accepted, no rotation.** The current key was sent over
+      Skool DM during the build (2026-07-22). Decision taken 2026-07-24: continue
+      on this key, on the basis that only Vaughan and Cesar have seen it.
+      Standing condition: **the Polymarket balance is the cap on this risk** —
+      keep only the active trading float in that wallet, never main funds. Revisit
+      before any material scale-up (Stage 3).
 - [ ] **Railway engine variables set**:
   - `POLYMARKET_PRIVATE_KEY` — exported wallet key
   - `POLYMARKET_FUNDER_ADDRESS` — your proxy wallet address (Polymarket profile)
