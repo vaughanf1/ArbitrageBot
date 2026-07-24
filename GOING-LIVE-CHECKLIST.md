@@ -1,23 +1,30 @@
 # Going live — runbook
 
-**Status at handover (2026-07-20):** live order placement is **built, safety-gated,
-and verified up to (but not including) transmitting a real order.** The final switch
-is deliberately left to you, following the procedure below. Do not skip stages.
+**Status (2026-07-24, rewritten for Polymarket US):** Cesar's funds ($59) are on
+**Polymarket US (QCEX)** — the CFTC-regulated US exchange, a completely separate
+venue from global Polymarket with its own accounts and API. The bot now has a
+dedicated US connector, verified live against Cesar's account (auth OK, balance
+visible, his manual UFC position visible). Live order placement is built,
+safety-gated, and verified up to (but not including) transmitting a real order.
 
 ## What the bot trades now
 
-One strategy: **single-market Polymarket arbitrage.** A binary market has a YES and
-a NO token; exactly one pays $1 at resolution. If YES + NO can be **bought together
-for less than $1**, the difference is locked-in profit with no prediction involved.
-The bot reads the live order book (not indicative prices), sizes to the depth
-actually available, and only fires when the combined cost is under $1 after fees.
+Primary strategy: **Polymarket US multi-outcome event arbitrage.** On the US
+exchange each market is one instrument (Yes = long, No = short of the same
+thing), so the old YES+NO trick can't exist inside one market. Instead: a
+multi-outcome EVENT (e.g. "NL Champion" — one market per team) has independent
+books, and exactly one outcome pays $1. If buying long on EVERY outcome costs
+under $1 combined, the difference is locked-in profit.
 
-**Set your expectations accordingly:** on liquid markets this window is rare —
-market makers keep YES+NO at or above $1.00 nearly all the time (at handover the
-tightest book across the top markets was $1.001). The bot's job is to be there in
-the seconds when someone leaves money on the table. It may find nothing for days.
-That is the market being efficient, not the bot being broken.
+**Exhaustiveness rule:** that logic is only riskless if the listed outcomes
+cover every possibility. Sports events (game winner, league champion) are
+exhaustive by construction and may auto-fire. Everything else (politics etc.)
+is **review-only, never auto-fires** — a missing candidate makes "sum under $1"
+a bet, not an arb. First live scan found a real 3.09% edge (Kansas Governor,
+correctly held for review) — the US books are visibly less efficient than the
+global ones, so expect more signals here than the global scanner ever showed.
 
+The global-Polymarket YES+NO scanner still runs (paper-only — no funds there).
 Kalshi and BitGet integrations remain in the code but are retired from live use.
 
 ## The three switches
@@ -28,7 +35,7 @@ A real order leaves the engine only when ALL THREE are set in Railway
 | Variable | Live value | What it does |
 |---|---|---|
 | `TRADING_MODE` | `live` | Global paper/live switch |
-| `LIVE_VENUES` | `polymarket` | Only listed venues may trade for real |
+| `LIVE_VENUES` | `polymarket-us` | Only listed venues may trade for real |
 | `EXECUTION_DRY_RUN` | `false` | While `true` (default): orders are built and signed but **never sent** |
 
 Anything else = simulation. If in doubt, set `EXECUTION_DRY_RUN=true` — that is
@@ -54,10 +61,12 @@ executed in, so paper fills can never appear as live P&L.
 
 ## Stage 0 — prerequisites (once)
 
-> **Checked at handover (2026-07-20):** the account behind the wallet key holds
-> **$0 USDC with no exchange allowances** (confirmed via the Polymarket CLOB API).
-> Until it is funded, flipping every switch below produces exactly nothing —
-> funding is the first real blocker, and only Cesar can clear it.
+> **2026-07-24, all cleared:** Cesar's US-app account is funded ($59 buying
+> power) and his developer API key (from polymarket.us/developer) is verified
+> working — signed balance + positions reads return his real data. Credentials
+> are set in Railway (`POLYMARKET_US_KEY_ID` / `POLYMARKET_US_SECRET_KEY`) with
+> `LIVE_VENUES=polymarket-us`. The old global-CLOB wallet-key prerequisites
+> below are struck: that account is empty and no longer the live venue.
 
 - [x] **Deployment is up** (redeployed fresh into Cesar's Railway, 2026-07-22 —
       project `cesar-arb-bot`):
@@ -69,27 +78,19 @@ executed in, so paper fills can never appear as live P&L.
       - Note: deployed via `railway up` from the local repo, not GitHub-linked.
         To redeploy after code changes: `railway up --service engine` (and/or
         `--service dashboard`) from the repo root, logged in as Cesar.
-- [ ] **Fund Polymarket**: deposit USDC in the Polymarket app (start small:
-      $200–500). Trading through the app once also sets the exchange allowances.
-      *(Re-checked 2026-07-24 via the CLOB API: still $0 balance, zero
-      allowances. This remains the one blocker only Cesar can clear.)*
-- [ ] **Confirm the funder address**: `POLYMARKET_FUNDER_ADDRESS` must be the
-      deposit/proxy address shown in your Polymarket profile — copy it fresh from
-      the app, don't trust old notes. A wrong funder is caught safely (the first
-      real order is rejected, nothing fills) but it will stall go-live.
-- [x] **Wallet key — risk accepted, no rotation.** The current key was sent over
-      Skool DM during the build (2026-07-22). Decision taken 2026-07-24: continue
-      on this key, on the basis that only Vaughan and Cesar have seen it.
-      Standing condition: **the Polymarket balance is the cap on this risk** —
-      keep only the active trading float in that wallet, never main funds. Revisit
-      before any material scale-up (Stage 3).
-- [ ] **Railway engine variables set**:
-  - [x] `POLYMARKET_PRIVATE_KEY` — set (verified working against the CLOB 2026-07-24)
-  - [ ] `POLYMARKET_FUNDER_ADDRESS` — **still missing.** Copy the deposit/proxy
-        address from Cesar's Polymarket profile. Not needed for the dry run
-        (which stops before auth) but required before any real order.
-  - [x] `CONTROL_TOKEN` — set.
-    Without it, limits/start/stop/resume are **locked** (kill switch always works).
+- [x] **Fund the account**: $59 buying power confirmed via the US API 2026-07-24.
+      Cesar has also placed a manual trade (1 UFC contract) which shows up
+      correctly through the API — the read path against his real account works.
+- [x] **API credentials**: `POLYMARKET_US_KEY_ID` + `POLYMARKET_US_SECRET_KEY`
+      set in Railway and verified live (signed balance/positions reads OK).
+      The secret travelled over Skool DM — same accepted-risk decision as the
+      old wallet key, with the account balance as the cap; it can be revoked
+      and reissued at polymarket.us/developer any time.
+- [x] `CONTROL_TOKEN` — set. Without it, limits/start/stop/resume are
+      **locked** (kill switch always works).
+- *(Superseded: the global-CLOB wallet-key / funder-address items. That
+  account holds $0 and is no longer the live venue; its key stays configured
+  only so the paper-mode global scanner keeps market data.)*
 - [ ] **Dashboard**: Controls page → paste the same `CONTROL_TOKEN` value into the
       Control token field → Save. This authorises your browser.
 - [ ] **Risk limits for the trial** (Controls page): Max trade size **$10**,
@@ -97,7 +98,7 @@ executed in, so paper fills can never appear as live P&L.
 
 ## Stage 1 — dry run (mandatory, ≥ 1 trading day)
 
-Set `TRADING_MODE=live`, `LIVE_VENUES=polymarket`, keep `EXECUTION_DRY_RUN=true`.
+Set `TRADING_MODE=live`, `LIVE_VENUES=polymarket-us`, keep `EXECUTION_DRY_RUN=true`.
 
 > **Started 2026-07-24:** `TRADING_MODE=live` set in Railway with dry-run ON.
 > The wallet key was also verified directly against the CLOB the same night
