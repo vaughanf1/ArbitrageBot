@@ -71,6 +71,8 @@ executed in, so paper fills can never appear as live P&L.
         `--service dashboard`) from the repo root, logged in as Cesar.
 - [ ] **Fund Polymarket**: deposit USDC in the Polymarket app (start small:
       $200–500). Trading through the app once also sets the exchange allowances.
+      *(Re-checked 2026-07-24 via the CLOB API: still $0 balance, zero
+      allowances. This remains the one blocker only Cesar can clear.)*
 - [ ] **Confirm the funder address**: `POLYMARKET_FUNDER_ADDRESS` must be the
       deposit/proxy address shown in your Polymarket profile — copy it fresh from
       the app, don't trust old notes. A wrong funder is caught safely (the first
@@ -82,9 +84,11 @@ executed in, so paper fills can never appear as live P&L.
       keep only the active trading float in that wallet, never main funds. Revisit
       before any material scale-up (Stage 3).
 - [ ] **Railway engine variables set**:
-  - `POLYMARKET_PRIVATE_KEY` — exported wallet key
-  - `POLYMARKET_FUNDER_ADDRESS` — your proxy wallet address (Polymarket profile)
-  - `CONTROL_TOKEN` — a long random string (e.g. from a password generator).
+  - [x] `POLYMARKET_PRIVATE_KEY` — set (verified working against the CLOB 2026-07-24)
+  - [ ] `POLYMARKET_FUNDER_ADDRESS` — **still missing.** Copy the deposit/proxy
+        address from Cesar's Polymarket profile. Not needed for the dry run
+        (which stops before auth) but required before any real order.
+  - [x] `CONTROL_TOKEN` — set.
     Without it, limits/start/stop/resume are **locked** (kill switch always works).
 - [ ] **Dashboard**: Controls page → paste the same `CONTROL_TOKEN` value into the
       Control token field → Save. This authorises your browser.
@@ -94,6 +98,12 @@ executed in, so paper fills can never appear as live P&L.
 ## Stage 1 — dry run (mandatory, ≥ 1 trading day)
 
 Set `TRADING_MODE=live`, `LIVE_VENUES=polymarket`, keep `EXECUTION_DRY_RUN=true`.
+
+> **Started 2026-07-24:** `TRADING_MODE=live` set in Railway with dry-run ON.
+> The wallet key was also verified directly against the CLOB the same night
+> (L2 API creds derive cleanly — no auth errors). Dry-run trades are recorded
+> as `paper` on the dashboard, since no money moves; the `live` label is
+> reserved for real transmitted orders.
 
 The engine log (Railway → engine → Logs) will show:
 `LIVE venues enabled in DRY-RUN: orders will be signed but NOT sent`
