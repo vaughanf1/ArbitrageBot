@@ -12,3 +12,4 @@ export {
   PolyIntraMarketScanner,
   type PolyIntraMarketScannerOptions,
 } from './poly-intra-market.js';
+export { UsEventArbScanner, type UsEventArbScannerOptions } from './us-event-arb.js';

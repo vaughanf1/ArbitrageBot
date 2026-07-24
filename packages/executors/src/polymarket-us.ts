@@ -1,0 +1,393 @@
+import { createPrivateKey, sign as edSign, type KeyObject } from 'node:crypto';
+import type { Fill, OpportunityLeg, Venue } from '@cesar-arb/shared';
+import type { Executor, MarketTicker, PlaceOrderResult } from './base.js';
+
+const API_BASE = 'https://api.polymarket.us';
+const GATEWAY_BASE = 'https://gateway.polymarket.us';
+
+// DER prefix that wraps a raw 32-byte Ed25519 seed into a PKCS8 private key,
+// which is the only form node:crypto accepts. Same no-new-deps approach as
+// the Kalshi executor's RSA-PSS signing.
+const ED25519_PKCS8_PREFIX = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+/**
+ * One outcome market inside a Polymarket US event. Unlike the global CLOB
+ * there are no YES/NO tokens: each market is a single instrument with ONE
+ * matched order book — "Yes" is a long position, "No" is a short. The
+ * YES+NO-under-$1 arb therefore cannot exist INSIDE a US market (ask + (1 −
+ * bid) ≥ $1 by construction); it lives across the sibling markets of a
+ * multi-outcome event instead. See UsEventArbScanner.
+ */
+export interface UsMarket {
+  slug: string;
+  question: string;
+  marketType: string;
+  active: boolean;
+  closed: boolean;
+}
+
+export interface UsEvent {
+  slug: string;
+  title: string;
+  category: string;
+  markets: UsMarket[];
+}
+
+/** Best price + size at the top of a US market's single order book. */
+export interface UsTopOfBook {
+  bestAsk: number;
+  askSize: number;
+  bestBid: number;
+  bidSize: number;
+}
+
+interface UsOrderExecution {
+  lastShares?: string;
+  lastPx?: { value?: string };
+  type?: string;
+  orderRejectReason?: string;
+  commissionNotionalCollected?: { value?: string };
+}
+
+interface UsCreateOrderResponse {
+  id?: string;
+  executions?: UsOrderExecution[];
+  message?: string;
+}
+
+/**
+ * Polymarket US (QCEX) executor — the CFTC-regulated US exchange, a fully
+ * separate venue from the global crypto CLOB. Auth is Ed25519 request
+ * signing with a portal-issued key id + secret (no wallets, no funder
+ * address). Live placement is gated exactly like every other executor:
+ * `enableLive` (TRADING_MODE=live + LIVE_VENUES) and `dryRun` (default on —
+ * resolve and size the real order but stop before signing/submitting).
+ */
+export class PolymarketUsExecutor implements Executor {
+  readonly venue: Venue = 'polymarket-us';
+  private readonly enableLive: boolean;
+  private readonly dryRun: boolean;
+  private readonly keyId?: string;
+  private signingKey: KeyObject | null = null;
+  private readonly secretKey?: string;
+  /** Extra allowance (bps) past the leg price so a limit-IOC order crosses. */
+  private readonly slippageBps: number;
+  private eventsCache: { events: UsEvent[]; cachedAt: number } | null = null;
+  // Events (market listings) change slowly; books are fetched fresh each
+  // scan. 60s keeps us far under the public 20 req/s limit.
+  private readonly eventsCacheMs = 60_000;
+
+  constructor(opts: {
+    keyId?: string;
+    /** Base64 secret from the developer portal (64-byte seed‖pubkey). */
+    secretKey?: string;
+    enableLive?: boolean;
+    dryRun?: boolean;
+    slippageBps?: number;
+  } = {}) {
+    this.keyId = opts.keyId;
+    this.secretKey = opts.secretKey;
+    this.enableLive = opts.enableLive ?? false;
+    this.dryRun = opts.dryRun ?? true;
+    this.slippageBps = opts.slippageBps ?? 100;
+  }
+
+  /** Lazily parse the base64 secret into a node crypto Ed25519 key. */
+  private getSigningKey(): KeyObject {
+    if (this.signingKey) return this.signingKey;
+    if (!this.secretKey) throw new Error('missing secret key');
+    const raw = Buffer.from(this.secretKey, 'base64');
+    // Portal secrets are 64 bytes (seed ‖ public key); the seed is the key.
+    const seed = raw.length === 64 ? raw.subarray(0, 32) : raw;
+    if (seed.length !== 32) throw new Error(`bad secret key length ${raw.length}`);
+    this.signingKey = createPrivateKey({
+      key: Buffer.concat([ED25519_PKCS8_PREFIX, seed]),
+      format: 'der',
+      type: 'pkcs8',
+    });
+    return this.signingKey;
+  }
+
+  /**
+   * Signed request to the authenticated API. The signature covers
+   * `{timestampMs}{METHOD}{pathname}` — pathname only, no query string, no
+   * body — matching the official polymarket-us SDK exactly.
+   */
+  private async authedFetch(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+  ): Promise<Response> {
+    if (!this.keyId) throw new Error('missing key id');
+    const ts = Date.now().toString();
+    const signature = edSign(null, Buffer.from(`${ts}${method}${path}`), this.getSigningKey()).toString(
+      'base64',
+    );
+    return fetch(`${API_BASE}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-PM-Access-Key': this.keyId,
+        'X-PM-Timestamp': ts,
+        'X-PM-Signature': signature,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
+
+  /** USD buying power in Cesar's US account. Used for go-live sanity checks. */
+  async buyingPowerUsd(): Promise<number> {
+    const res = await this.authedFetch('GET', '/v1/account/balances');
+    if (!res.ok) throw new Error(`polymarket-us balances HTTP ${res.status}`);
+    const data = (await res.json()) as { balances?: { buyingPower?: number; currency?: string }[] };
+    const usd = (data.balances ?? []).find((b) => b.currency === 'USD');
+    return usd?.buyingPower ?? 0;
+  }
+
+  /** Active multi-market events from the public gateway (cached ~60s). */
+  async listActiveEvents(): Promise<UsEvent[]> {
+    if (this.eventsCache && Date.now() - this.eventsCache.cachedAt < this.eventsCacheMs) {
+      return this.eventsCache.events;
+    }
+    const events: UsEvent[] = [];
+    const maxPages = 5;
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({
+        active: 'true',
+        closed: 'false',
+        limit: '100',
+        offset: String(page * 100),
+      });
+      const res = await fetch(`${GATEWAY_BASE}/v1/events?${params.toString()}`);
+      if (!res.ok) throw new Error(`polymarket-us events HTTP ${res.status}`);
+      const data = (await res.json()) as { events?: RawEvent[] };
+      const rows = data.events ?? [];
+      for (const r of rows) {
+        const parsed = parseEvent(r);
+        if (parsed) events.push(parsed);
+      }
+      if (rows.length < 100) break;
+    }
+    this.eventsCache = { events, cachedAt: Date.now() };
+    return events;
+  }
+
+  /**
+   * Top-of-book for each market slug, from the full public book (the bbo
+   * endpoint reports level COUNTS, not sizes, so it can't cap trade size).
+   * Fetched with bounded concurrency to respect the public 20 req/s limit.
+   * Slugs with an empty or one-sided book are omitted.
+   */
+  async topOfBooks(slugs: string[]): Promise<Map<string, UsTopOfBook>> {
+    const out = new Map<string, UsTopOfBook>();
+    const concurrency = 8;
+    for (let i = 0; i < slugs.length; i += concurrency) {
+      const batch = slugs.slice(i, i + concurrency);
+      const results = await Promise.all(
+        batch.map(async (slug) => {
+          try {
+            const res = await fetch(`${GATEWAY_BASE}/v1/markets/${encodeURIComponent(slug)}/book`);
+            if (!res.ok) return null;
+            const data = (await res.json()) as {
+              marketData?: {
+                bids?: { px?: { value?: string }; qty?: string }[];
+                offers?: { px?: { value?: string }; qty?: string }[];
+              };
+            };
+            const md = data.marketData;
+            if (!md) return null;
+            // Don't assume sort order — take the true best level.
+            let bestAsk = Infinity;
+            let askSize = 0;
+            for (const o of md.offers ?? []) {
+              const p = numOr(o.px?.value, NaN);
+              if (!isFinite(p) || p <= 0) continue;
+              if (p < bestAsk) {
+                bestAsk = p;
+                askSize = numOr(o.qty, 0);
+              }
+            }
+            let bestBid = 0;
+            let bidSize = 0;
+            for (const b of md.bids ?? []) {
+              const p = numOr(b.px?.value, NaN);
+              if (!isFinite(p) || p <= 0) continue;
+              if (p > bestBid) {
+                bestBid = p;
+                bidSize = numOr(b.qty, 0);
+              }
+            }
+            if (!isFinite(bestAsk) || bestAsk === Infinity) return null;
+            return { slug, book: { bestAsk, askSize, bestBid, bidSize } };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      for (const r of results) {
+        if (r) out.set(r.slug, r.book);
+      }
+    }
+    return out;
+  }
+
+  async ticker(symbol: string): Promise<MarketTicker> {
+    // Symbol is "<marketSlug>:LONG" (only long positions are traded/held).
+    const slug = symbol.split(':')[0];
+    if (!slug) throw new Error(`polymarket-us ticker: bad symbol ${symbol}`);
+    const books = await this.topOfBooks([slug]);
+    const b = books.get(slug);
+    if (!b) throw new Error(`polymarket-us ticker: no book for ${slug}`);
+    const last = b.bestBid > 0 ? (b.bestAsk + b.bestBid) / 2 : b.bestAsk;
+    return { symbol, bid: b.bestBid, ask: b.bestAsk, last, ts: Date.now() };
+  }
+
+  async tickers(symbols: string[]): Promise<MarketTicker[]> {
+    const out: MarketTicker[] = [];
+    for (const s of symbols) {
+      try {
+        out.push(await this.ticker(s));
+      } catch {
+        /* skip */
+      }
+    }
+    return out;
+  }
+
+  async placeMarketOrder(leg: OpportunityLeg): Promise<PlaceOrderResult> {
+    if (!this.enableLive) {
+      return { ok: false, error: 'polymarket-us: live trading disabled (paper mode)' };
+    }
+    if (!this.keyId || !this.secretKey) {
+      return { ok: false, error: 'polymarket-us: missing API credentials' };
+    }
+    const slug = leg.symbol.split(':')[0];
+    if (!slug) {
+      return { ok: false, error: `polymarket-us: bad leg symbol ${leg.symbol}` };
+    }
+
+    // Contracts are whole units on the regulated exchange; never round UP
+    // into a bigger position than the opportunity sized.
+    const qty = Math.floor(leg.qty);
+    if (qty <= 0) {
+      return { ok: false, error: `polymarket-us: leg qty ${leg.qty} rounds to 0 contracts` };
+    }
+    // Marketable limit: cross the book but cap what we'll pay (buy) or
+    // accept (sell). IOC so nothing rests — the arb wants an immediate fill.
+    const isSell = leg.side === 'sell';
+    const slip = this.slippageBps / 10_000;
+    const limitPrice = isSell
+      ? Math.max(0.001, leg.price * (1 - slip))
+      : Math.min(0.999, leg.price * (1 + slip));
+
+    // DRY RUN: everything above ran for real; stop before signing/submitting.
+    if (this.dryRun) {
+      return {
+        ok: true,
+        fill: {
+          venue: this.venue,
+          symbol: leg.symbol,
+          side: leg.side,
+          qty,
+          price: leg.price,
+          feeUsd: 0,
+          filledAt: Date.now(),
+        },
+      };
+    }
+
+    try {
+      const res = await this.authedFetch('POST', '/v1/orders', {
+        marketSlug: slug,
+        // Entries buy long; unwinds sell the long back. We never go short.
+        intent: isSell ? 'ORDER_INTENT_SELL_LONG' : 'ORDER_INTENT_BUY_LONG',
+        type: 'ORDER_TYPE_LIMIT',
+        price: { value: limitPrice.toFixed(3), currency: 'USD' },
+        quantity: qty,
+        tif: 'TIME_IN_FORCE_IMMEDIATE_OR_CANCEL',
+        // Block until the matching engine reports executions so the response
+        // tells us the actual fill instead of requiring a follow-up poll.
+        synchronousExecution: true,
+      });
+      const data = (await res.json().catch(() => ({}))) as UsCreateOrderResponse;
+      if (!res.ok) {
+        return { ok: false, error: `polymarket-us: order HTTP ${res.status}: ${data.message ?? ''}` };
+      }
+      const rejected = (data.executions ?? []).find((e) => e.orderRejectReason);
+      if (rejected) {
+        return { ok: false, error: `polymarket-us: order rejected: ${rejected.orderRejectReason}` };
+      }
+      // Aggregate fills across executions; IOC may fill partially or not at all.
+      let filled = 0;
+      let spent = 0;
+      let feeUsd = 0;
+      for (const e of data.executions ?? []) {
+        const shares = numOr(e.lastShares, 0);
+        const px = numOr(e.lastPx?.value, NaN);
+        if (shares > 0 && isFinite(px)) {
+          filled += shares;
+          spent += shares * px;
+        }
+        feeUsd += numOr(e.commissionNotionalCollected?.value, 0);
+      }
+      if (filled <= 0) {
+        return { ok: false, error: 'polymarket-us: IOC order did not fill (book moved)' };
+      }
+      const fill: Fill = {
+        venue: this.venue,
+        symbol: leg.symbol,
+        side: leg.side,
+        qty: filled,
+        price: spent / filled,
+        feeUsd,
+        filledAt: Date.now(),
+      };
+      return { ok: true, fill };
+    } catch (err) {
+      return { ok: false, error: `polymarket-us: order failed: ${(err as Error).message}` };
+    }
+  }
+}
+
+interface RawEvent {
+  slug?: string;
+  title?: string;
+  category?: string;
+  active?: boolean;
+  closed?: boolean;
+  markets?: {
+    slug?: string;
+    question?: string;
+    marketType?: string;
+    active?: boolean;
+    closed?: boolean;
+  }[];
+}
+
+function parseEvent(r: RawEvent): UsEvent | null {
+  if (!r.slug || r.closed || r.active === false) return null;
+  const markets: UsMarket[] = [];
+  for (const m of r.markets ?? []) {
+    if (!m.slug || m.closed || m.active === false) continue;
+    markets.push({
+      slug: m.slug,
+      question: m.question ?? m.slug,
+      marketType: m.marketType ?? '',
+      active: m.active ?? true,
+      closed: m.closed ?? false,
+    });
+  }
+  if (markets.length === 0) return null;
+  return {
+    slug: r.slug,
+    title: r.title ?? r.slug,
+    category: r.category ?? '',
+    markets,
+  };
+}
+
+function numOr(v: unknown, fallback: number): number {
+  if (v === undefined || v === null) return fallback;
+  const n = typeof v === 'number' ? v : Number(v);
+  return isFinite(n) ? n : fallback;
+}

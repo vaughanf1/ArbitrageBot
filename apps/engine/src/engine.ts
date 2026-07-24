@@ -13,6 +13,7 @@ import {
   KalshiExecutor,
   PaperExecutor,
   PolymarketExecutor,
+  PolymarketUsExecutor,
   CexSpotExecutor,
   makeCexSpotExecutor,
   CEX_SPOT_VENUES,
@@ -23,6 +24,7 @@ import {
   TriangularScanner,
   CrossExchangeScanner,
   PolyIntraMarketScanner,
+  UsEventArbScanner,
   DEFAULT_TRIANGLES,
   type Scanner,
 } from '@cesar-arb/scanners';
@@ -73,6 +75,7 @@ export class Engine {
 
   private bitget!: BitgetExecutor;
   private polymarket!: PolymarketExecutor;
+  private polymarketUs!: PolymarketUsExecutor;
   private kalshi!: KalshiExecutor;
   private paperBitget!: PaperExecutor;
   private paperPoly!: PaperExecutor;
@@ -168,6 +171,12 @@ export class Engine {
       enableLive: liveFor('polymarket'),
       dryRun,
     });
+    this.polymarketUs = new PolymarketUsExecutor({
+      keyId: this.config.polymarketUs.keyId || undefined,
+      secretKey: this.config.polymarketUs.secretKey || undefined,
+      enableLive: liveFor('polymarket-us'),
+      dryRun,
+    });
     this.kalshi = new KalshiExecutor({
       apiKeyId: this.config.kalshi.apiKeyId || undefined,
       privateKeyPath: this.config.kalshi.privateKeyPath || undefined,
@@ -184,10 +193,16 @@ export class Engine {
     this.executorByVenue.set('bitget', this.paperBitget);
     this.executorByVenue.set('polymarket', liveFor('polymarket') ? this.polymarket : this.paperPoly);
     this.executorByVenue.set('kalshi', liveFor('kalshi') ? this.kalshi : this.paperKalshi);
-    this.liveRoutedVenues = new Set(
-      (['polymarket', 'kalshi'] as Venue[]).filter((v) => liveFor(v)),
+    this.executorByVenue.set(
+      'polymarket-us',
+      liveFor('polymarket-us')
+        ? this.polymarketUs
+        : new PaperExecutor({ dataSource: this.polymarketUs, feeBps: 0, slippageBps: 50 }),
     );
-    if (liveFor('kalshi') || liveFor('polymarket')) {
+    this.liveRoutedVenues = new Set(
+      (['polymarket', 'polymarket-us', 'kalshi'] as Venue[]).filter((v) => liveFor(v)),
+    );
+    if (liveFor('kalshi') || liveFor('polymarket') || liveFor('polymarket-us')) {
       this.logger.warn(
         { liveVenues: this.config.execution.liveVenues, dryRun },
         dryRun
@@ -243,6 +258,15 @@ export class Engine {
       // live/dry-run safety gates with no extra wiring.
       new PolyIntraMarketScanner({
         polymarket: this.polymarket,
+        minEdgePct: this.config.limits.minSpreadPct,
+        sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
+      }),
+      // Polymarket US (QCEX) multi-outcome event arb — the one strategy that
+      // runs on the exchange where Cesar's funds actually are. Market data is
+      // public, so it scans in paper mode too; live legs route to the
+      // credentialed US executor behind the same three-switch gates.
+      new UsEventArbScanner({
+        executor: this.polymarketUs,
         minEdgePct: this.config.limits.minSpreadPct,
         sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
       }),
@@ -522,16 +546,20 @@ export class Engine {
       triangleSymbols.add(t.pairs.quoteOther);
       triangleSymbols.add(t.pairs.midOther);
     }
-    const [bitgetTickers, polyMarkets, kalshiMarkets, ...spot] = await Promise.allSettled([
+    const [bitgetTickers, polyMarkets, kalshiMarkets, usEvents, ...spot] = await Promise.allSettled([
       this.bitget.tickers([...triangleSymbols]),
       this.polymarket.listActiveMarkets(),
       this.kalshi.listActiveMarkets(),
+      this.polymarketUs.listActiveEvents(),
       ...this.cexSpot.map((e) => e.tickers(CROSS_EXCHANGE_ASSETS)),
     ]);
     const next = { ...this.marketCounts };
     if (bitgetTickers.status === 'fulfilled') next.bitget = bitgetTickers.value.length;
     if (polyMarkets.status === 'fulfilled') next.polymarket = polyMarkets.value.length;
     if (kalshiMarkets.status === 'fulfilled') next.kalshi = kalshiMarkets.value.length;
+    if (usEvents.status === 'fulfilled') {
+      next['polymarket-us'] = usEvents.value.reduce((n, e) => n + e.markets.length, 0);
+    }
     this.cexSpot.forEach((e, i) => {
       const r = spot[i];
       if (r && r.status === 'fulfilled') next[e.venue] = r.value.length;

@@ -49,6 +49,8 @@ export interface EngineConfig {
     funderAddress: string;
   };
   kalshi: { apiKeyId: string; privateKeyPath: string };
+  /** Polymarket US (QCEX) — portal API key, no wallets involved. */
+  polymarketUs: { keyId: string; secretKey: string };
   report: { to: string; from: string; resendKey: string };
   predictionMatchMode: PredictionMatchMode;
   /**
@@ -97,6 +99,10 @@ export function loadConfig(): EngineConfig {
       apiKeyId: str('KALSHI_API_KEY_ID'),
       privateKeyPath: str('KALSHI_PRIVATE_KEY_PATH'),
     },
+    polymarketUs: {
+      keyId: str('POLYMARKET_US_KEY_ID'),
+      secretKey: str('POLYMARKET_US_SECRET_KEY'),
+    },
     report: {
       to: str('REPORT_EMAIL_TO'),
       from: str('REPORT_EMAIL_FROM'),
@@ -117,7 +123,7 @@ function parseMatchMode(v: string): PredictionMatchMode {
 }
 
 const KNOWN_VENUES: ReadonlySet<string> = new Set<Venue>([
-  'bitget', 'binance', 'coinbase', 'kraken', 'okx', 'bybit', 'polymarket', 'kalshi', 'paper',
+  'bitget', 'binance', 'coinbase', 'kraken', 'okx', 'bybit', 'polymarket', 'polymarket-us', 'kalshi', 'paper',
 ]);
 
 /** Parse LIVE_VENUES="kalshi,polymarket" → validated Venue[]. Unknown names are dropped. */

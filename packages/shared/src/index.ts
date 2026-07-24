@@ -12,6 +12,7 @@ export type Venue =
   | 'okx'
   | 'bybit'
   | 'polymarket'
+  | 'polymarket-us'
   | 'kalshi'
   | 'paper';
 
