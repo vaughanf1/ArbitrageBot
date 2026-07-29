@@ -46,6 +46,7 @@ interface UsOrderExecution {
   lastPx?: { value?: string };
   type?: string;
   orderRejectReason?: string;
+  text?: string;
   commissionNotionalCollected?: { value?: string };
 }
 
@@ -313,9 +314,15 @@ export class PolymarketUsExecutor implements Executor {
       if (!res.ok) {
         return { ok: false, error: `polymarket-us: order HTTP ${res.status}: ${data.message ?? ''}` };
       }
-      const rejected = (data.executions ?? []).find((e) => e.orderRejectReason);
+      // Every execution carries `orderRejectReason` even on success — it is a
+      // protobuf enum whose zero value serializes as
+      // ORD_REJECT_REASON_EXCHANGE_OPTION, so its mere presence means nothing.
+      // Only an execution of type REJECTED is an actual rejection; the real
+      // reason (price band, buying power, …) arrives in its `text` field.
+      const rejected = (data.executions ?? []).find((e) => e.type === 'EXECUTION_TYPE_REJECTED');
       if (rejected) {
-        return { ok: false, error: `polymarket-us: order rejected: ${rejected.orderRejectReason}` };
+        const detail = rejected.text || rejected.orderRejectReason || 'no reason given';
+        return { ok: false, error: `polymarket-us: order rejected: ${detail}` };
       }
       // Aggregate fills across executions; IOC may fill partially or not at all.
       let filled = 0;
