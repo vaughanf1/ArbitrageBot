@@ -33,6 +33,13 @@ export interface UsEvent {
   markets: UsMarket[];
 }
 
+/** A non-zero exchange-side position (netPosition > 0 means long). */
+export interface UsOpenPosition {
+  marketSlug: string;
+  netPosition: number;
+  costUsd: number;
+}
+
 /** Best price + size at the top of a US market's single order book. */
 export interface UsTopOfBook {
   bestAsk: number;
@@ -143,6 +150,25 @@ export class PolymarketUsExecutor implements Executor {
     const data = (await res.json()) as { balances?: { buyingPower?: number; currency?: string }[] };
     const usd = (data.balances ?? []).find((b) => b.currency === 'USD');
     return usd?.buyingPower ?? 0;
+  }
+
+  /**
+   * Open (non-zero) positions as the EXCHANGE sees them. This is the ground
+   * truth the ledger reconciles against — after the 2026-07-29 incident where
+   * misread rejections left real fills the bot never recorded.
+   */
+  async openPositions(): Promise<UsOpenPosition[]> {
+    const res = await this.authedFetch('GET', '/v1/portfolio/positions');
+    if (!res.ok) throw new Error(`polymarket-us positions HTTP ${res.status}`);
+    const data = (await res.json()) as {
+      positions?: Record<string, { netPositionDecimal?: string; netPosition?: string; cost?: { value?: string } }>;
+    };
+    const out: UsOpenPosition[] = [];
+    for (const [marketSlug, p] of Object.entries(data.positions ?? {})) {
+      const net = numOr(p.netPositionDecimal ?? p.netPosition, 0);
+      if (net !== 0) out.push({ marketSlug, netPosition: net, costUsd: numOr(p.cost?.value, 0) });
+    }
+    return out;
   }
 
   /** Active multi-market events from the public gateway (cached ~60s). */

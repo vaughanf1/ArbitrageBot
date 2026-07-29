@@ -198,6 +198,14 @@ export class Storage {
     return rows.map(rowToTrade);
   }
 
+  /** Every live-mode trade ever recorded — the ledger side of reconciliation. */
+  liveTrades(): Trade[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM trades WHERE mode = 'live' ORDER BY opened_at ASC`)
+      .all() as TradeRow[];
+    return rows.map(rowToTrade);
+  }
+
   tradesForDate(ymd: string): Trade[] {
     const start = Date.parse(`${ymd}T00:00:00Z`);
     const end = start + 24 * 60 * 60 * 1000;

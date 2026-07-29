@@ -172,6 +172,19 @@ export interface EngineStatus {
    * Always includes at least bitget / polymarket / kalshi.
    */
   marketCounts: Record<string, number>;
+  /**
+   * Ledger-vs-exchange position check for live venues. A mismatch means the
+   * exchange holds (or lacks) contracts the ledger doesn't know about —
+   * either a fill-parsing bug or a manual trade in the same account. Null
+   * until the first check runs (paper/dry-run modes never run it).
+   */
+  reconciliation?: {
+    at: number;
+    ok: boolean;
+    /** Human-readable note when the check itself failed (API error). */
+    error?: string;
+    mismatches: { marketSlug: string; ledgerNet: number; exchangeNet: number }[];
+  } | null;
 }
 
 export interface DailyReport {

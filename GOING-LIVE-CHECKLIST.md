@@ -136,6 +136,23 @@ Only after a clean Stage 1. **Do this while watching the dashboard and logs live
 - *The unwind itself fails*: kill switch trips automatically, a CRITICAL log line
   is written, and the bot stops. You then close the position by hand in Polymarket.
 
+### Incident 2026-07-29 — false rejections hid real fills (FIXED)
+
+The first Stage 2 attempts all showed `failed / $0.00` with
+`ORD_REJECT_REASON_EXCHANGE_OPTION`. That string is the **default value** the
+exchange stamps on *every* execution report, success included; the executor
+misread it as a rejection, so each arb's first leg filled for real while the
+bot recorded a failure, aborted the other legs, and retried later. Result: an
+untracked 50-contract long ("NFC East Winner — PHI", $18.70) that appeared
+nowhere on the dashboard. Resolution: parsing fixed (only
+`EXECUTION_TYPE_REJECTED` counts, real reason read from the `text` field,
+commit `59a0d71`), position sold back at $0.35 (≈ $1.90 loss), and a
+**reconciliation guard** added: every 10 minutes and after every live trade
+the engine compares exchange positions against the ledger's net live fills and
+exposes the result as `reconciliation` in `/api/status` (warn-only — Cesar
+trading manually in the same account also shows up here). If `ok: false`
+appears, find out why before trusting anything else the dashboard says.
+
 ## Stage 3 — scale (gradual)
 
 - [ ] 3–5 clean, reconciled fills at $10 before any increase.

@@ -98,6 +98,8 @@ export class Engine {
   private currentOpportunities: Opportunity[] = [];
   private currentCandidates: Opportunity[] = [];
   private loopHandle: NodeJS.Timeout | null = null;
+  private reconcileHandle: NodeJS.Timeout | null = null;
+  private lastReconciliation: EngineStatus['reconciliation'] = null;
 
   /**
    * Recently-fired opportunity fingerprints with the timestamp of the most
@@ -308,6 +310,7 @@ export class Engine {
     this.logger.info({ mode: this.mode }, 'engine started');
     this.loopHandle = setTimeout(() => this.tick().catch((e) => this.logger.error(e)), 0);
     this.scheduleNextDailyReport();
+    this.scheduleReconciliation();
   }
 
   async stop(): Promise<void> {
@@ -316,7 +319,82 @@ export class Engine {
     this.loopHandle = null;
     if (this.reportHandle) clearTimeout(this.reportHandle);
     this.reportHandle = null;
+    if (this.reconcileHandle) clearInterval(this.reconcileHandle);
+    this.reconcileHandle = null;
     this.logger.info('engine stopped');
+  }
+
+  /**
+   * Every 10 minutes (and once at startup), compare the exchange's open
+   * positions against the net of every live fill in the ledger. Exists
+   * because of the 2026-07-29 incident: a response-parsing bug made real
+   * fills look like rejections, and the account quietly accumulated a
+   * one-sided position the ledger knew nothing about. Warn-only — a
+   * mismatch can also be Cesar trading manually in the same account — but
+   * it is surfaced in /api/status so it can never stay invisible.
+   */
+  private scheduleReconciliation(): void {
+    if (!this.liveRoutedVenues.has('polymarket-us') || this.config.execution.dryRun) return;
+    const run = () =>
+      this.reconcileUsPositions().catch((e) =>
+        this.logger.error({ err: (e as Error).message }, 'position reconciliation failed'),
+      );
+    run();
+    this.reconcileHandle = setInterval(run, 10 * 60 * 1000);
+  }
+
+  private async reconcileUsPositions(): Promise<void> {
+    // Ledger side: net contracts per market across every live fill ever.
+    const ledgerNet = new Map<string, number>();
+    for (const trade of this.storage.liveTrades()) {
+      for (const fill of trade.fills) {
+        if (fill.venue !== 'polymarket-us') continue;
+        const slug = fill.symbol.split(':')[0] ?? fill.symbol;
+        const signed = fill.side === 'buy' ? fill.qty : -fill.qty;
+        ledgerNet.set(slug, (ledgerNet.get(slug) ?? 0) + signed);
+      }
+    }
+    let exchange;
+    try {
+      exchange = await this.polymarketUs.openPositions();
+    } catch (err) {
+      this.lastReconciliation = {
+        at: Date.now(),
+        ok: false,
+        error: `positions fetch failed: ${(err as Error).message}`,
+        mismatches: [],
+      };
+      return;
+    }
+    const exchangeNet = new Map(exchange.map((p) => [p.marketSlug, p.netPosition]));
+    // Markets settle and vanish from the exchange while their fills stay in
+    // the ledger forever; without this filter every resolved market would be
+    // a permanent false alarm. Ledger-only slugs missing from the active
+    // listing are treated as resolved and skipped.
+    let activeSlugs: Set<string> | null = null;
+    try {
+      const events = await this.polymarketUs.listActiveEvents();
+      activeSlugs = new Set(events.flatMap((e) => e.markets.map((m) => m.slug)));
+    } catch {
+      activeSlugs = null; // listing unavailable — fall back to comparing everything
+    }
+    const slugs = new Set([...ledgerNet.keys(), ...exchangeNet.keys()]);
+    const mismatches: { marketSlug: string; ledgerNet: number; exchangeNet: number }[] = [];
+    for (const slug of slugs) {
+      const ledger = ledgerNet.get(slug) ?? 0;
+      const actual = exchangeNet.get(slug) ?? 0;
+      if (actual === 0 && activeSlugs && !activeSlugs.has(slug)) continue;
+      if (Math.abs(ledger - actual) > 1e-6) {
+        mismatches.push({ marketSlug: slug, ledgerNet: ledger, exchangeNet: actual });
+      }
+    }
+    this.lastReconciliation = { at: Date.now(), ok: mismatches.length === 0, mismatches };
+    if (mismatches.length > 0) {
+      this.logger.warn(
+        { mismatches },
+        'POSITION MISMATCH: exchange holdings differ from ledger — bot bug or manual trading; reconcile before trusting P&L',
+      );
+    }
   }
 
   /**
@@ -396,6 +474,7 @@ export class Engine {
       lastScanAt: this.lastScanAt,
       lastScanMs: this.lastScanMs,
       marketCounts: this.marketCounts,
+      reconciliation: this.lastReconciliation,
     };
   }
 
@@ -634,6 +713,13 @@ export class Engine {
       trade.closedAt = Date.now();
       this.storage.recordTrade(trade);
       this.tradedCount += 1;
+      // A failed live attempt is exactly when hidden fills can appear —
+      // re-check the exchange immediately rather than waiting for the timer.
+      if (routing === 'live' && !this.config.execution.dryRun) {
+        this.reconcileUsPositions().catch((e) =>
+          this.logger.error({ err: (e as Error).message }, 'post-trade reconciliation failed'),
+        );
+      }
       return;
     }
 
@@ -662,6 +748,11 @@ export class Engine {
     this.storage.recordTrade(trade);
     this.tradedCount += 1;
     this.logger.info({ trade: trade.id, pnl: pnl.toFixed(2) }, 'trade closed');
+    if (routing === 'live' && !this.config.execution.dryRun) {
+      this.reconcileUsPositions().catch((e) =>
+        this.logger.error({ err: (e as Error).message }, 'post-trade reconciliation failed'),
+      );
+    }
   }
 
   /**
