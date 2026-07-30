@@ -28,6 +28,13 @@ import { newOpportunityId, type Scanner } from './base.js';
  * IDENTICAL to an arb in the data; that's precisely when not to fire.
  */
 
+/**
+ * QCEX taker commission per contract ≈ rate · price · (1 − price). Rate
+ * fitted to real fills (2026-07-29/30): $0.42 on 4×10 @ 0.36/0.34/0.15/0.13,
+ * $0.68 on 50 @ 0.35, $0.01 on 1 @ 0.48.
+ */
+const US_FEE_RATE = 0.06;
+
 export interface UsEventArbScannerOptions {
   executor: PolymarketUsExecutor;
   minEdgePct: number;
@@ -114,9 +121,17 @@ export class UsEventArbScanner implements Scanner {
       const cost = sides.reduce((sum, s) => sum + s.book!.bestAsk, 0);
       if (!isFinite(cost) || cost <= 0 || cost >= 1) continue; // no edge if ≥ $1
 
-      const feePct = (this.feeBps * event.markets.length) / 100;
+      // QCEX charges ~$0.06 · p · (1−p) per contract per leg (verified against
+      // real fills 2026-07-30: the first live arb filled at exactly the quoted
+      // prices yet lost money because a 2% gross edge paid ~4% in fees). The
+      // edge must clear fees or the "guaranteed profit" is a guaranteed loss.
+      const feePerContractSet = sides.reduce((sum, s) => {
+        const p = s.book!.bestAsk;
+        return sum + US_FEE_RATE * p * (1 - p);
+      }, 0);
+      const extraFeePct = (this.feeBps * event.markets.length) / 100;
       const grossEdgePct = ((1 - cost) / cost) * 100;
-      const edgePct = grossEdgePct - feePct;
+      const edgePct = ((1 - cost - feePerContractSet) / cost) * 100 - extraFeePct;
 
       // Whole contracts only on the US exchange, and every leg needs the SAME
       // quantity for the payoff math to hold — cap by the shallowest book.
@@ -125,7 +140,14 @@ export class UsEventArbScanner implements Scanner {
       if (qty <= 0) continue;
 
       const deployedUsd = qty * cost;
-      const profitUsd = qty * (1 - cost) - (deployedUsd * feePct) / 100;
+      // Exchange rounds each leg's commission to the cent — round up per leg
+      // so the estimate errs against firing marginal trades.
+      const estFeeUsd = sides.reduce((sum, s) => {
+        const p = s.book!.bestAsk;
+        return sum + Math.ceil(US_FEE_RATE * p * (1 - p) * qty * 100) / 100;
+      }, 0);
+      const profitUsd = qty * (1 - cost) - estFeeUsd - (deployedUsd * extraFeePct) / 100;
+      if (profitUsd <= 0) continue; // fee-negative "arb" — never worth firing
 
       const legs: OpportunityLeg[] = sides.map((s) => ({
         venue: 'polymarket-us',
@@ -156,8 +178,7 @@ export class UsEventArbScanner implements Scanner {
         reasoning:
           `Polymarket US multi-outcome arb on "${event.title}". Buying long on all ` +
           `${event.markets.length} outcomes costs $${cost.toFixed(3)} for a guaranteed $1 payoff ` +
-          `→ ${edgePct.toFixed(2)}% edge` +
-          (feePct > 0 ? ` after ${feePct.toFixed(2)}% fees` : '') +
+          `→ ${edgePct.toFixed(2)}% net edge (${grossEdgePct.toFixed(2)}% gross − est. fees $${estFeeUsd.toFixed(2)})` +
           `. Fillable size ${qty} contracts (shallowest book ${maxQtyByBook.toFixed(0)}). ` +
           (exhaustive
             ? 'Sports outcome set — exhaustive by construction, one leg must pay.'
