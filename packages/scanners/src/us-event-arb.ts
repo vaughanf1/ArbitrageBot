@@ -82,17 +82,58 @@ export class UsEventArbScanner implements Scanner {
       return [];
     }
 
-    // Only multi-outcome events can arb (2+ independent books), and huge
-    // outcome sets are execution nightmares — bound the leg count.
-    const candidates = events.filter(
-      (e) => e.markets.length >= 2 && e.markets.length <= this.maxLegs,
-    );
+    // An event mixes market types: a match carries a home/draw/away trio PLUS
+    // totals/spreads/props. Only a same-type group can be an outcome set —
+    // summing asks across the whole event buries the real trio under
+    // unrelated props (which is why match-winner arbs were never detected
+    // before 2026-07-30). Group by marketType and treat each group as its own
+    // basket:
+    //   drawable_outcome ×3  → home/draw/away: exclusive + exhaustive
+    //   moneyline ×2         → two-way winner: exclusive + exhaustive
+    //   futures              → one market per team/outcome: exclusive, and
+    //                          exhaustive only for sports (elsewhere the type
+    //                          also covers cumulative ladders like "CPI above
+    //                          X" where SEVERAL legs can pay — never an arb).
+    interface Basket {
+      title: string;
+      category: string;
+      groupType: string;
+      markets: UsEvent['markets'];
+      exhaustive: boolean;
+    }
+    const candidates: Basket[] = [];
+    for (const e of events) {
+      const byType = new Map<string, UsEvent['markets']>();
+      for (const m of e.markets) {
+        const list = byType.get(m.marketType) ?? [];
+        list.push(m);
+        byType.set(m.marketType, list);
+      }
+      const draw = byType.get('drawable_outcome');
+      if (draw?.length === 3) {
+        candidates.push({ title: e.title, category: e.category, groupType: 'drawable_outcome', markets: draw, exhaustive: true });
+      }
+      const ml = byType.get('moneyline');
+      if (ml?.length === 2) {
+        candidates.push({ title: e.title, category: e.category, groupType: 'moneyline', markets: ml, exhaustive: true });
+      }
+      const fut = byType.get('futures');
+      if (fut && fut.length >= 2 && fut.length <= this.maxLegs) {
+        candidates.push({
+          title: e.title,
+          category: e.category,
+          groupType: 'futures',
+          markets: fut,
+          exhaustive: e.category === 'sports',
+        });
+      }
+    }
     if (candidates.length === 0) return [];
 
     // The public API budget won't cover every event each tick. Rotate a
     // window across the candidate list so all events get scanned over a few
     // ticks rather than the same head slice every time.
-    const picked: UsEvent[] = [];
+    const picked: Basket[] = [];
     let bookBudget = this.maxBooks;
     for (let i = 0; i < candidates.length && bookBudget > 0; i++) {
       const e = candidates[(this.cursor + i) % candidates.length]!;
@@ -158,10 +199,11 @@ export class UsEventArbScanner implements Scanner {
         note: `buy ${truncate(s.market.question, 40)} @ ${s.book!.bestAsk.toFixed(3)} (depth ${s.book!.askSize})`,
       }));
 
-      // Sports outcome sets (game winner, league champion) are exhaustive by
-      // construction. Anything else could silently omit an outcome, which
-      // makes "sum of asks < $1" a directional bet, not an arb — review only.
-      const exhaustive = event.category === 'sports';
+      // Exhaustiveness decided at grouping time: home/draw/away trios and
+      // two-way moneylines are exhaustive by construction; futures only for
+      // sports. A non-exhaustive basket under $1 is a directional bet, not an
+      // arb — review only.
+      const exhaustive = event.exhaustive;
 
       out.push({
         id: newOpportunityId('use'),
@@ -170,7 +212,7 @@ export class UsEventArbScanner implements Scanner {
         strategy: 'prediction-pair' as StrategyKind,
         assetClass: 'prediction' as AssetClass,
         venues: ['polymarket-us'],
-        description: `US event arb: ${truncate(event.title, 60)} (${event.markets.length} outcomes)`,
+        description: `US event arb: ${truncate(event.title, 60)} (${event.markets.length}-leg ${event.groupType})`,
         edgePct,
         estProfitUsd: profitUsd,
         sizeUsd: deployedUsd,

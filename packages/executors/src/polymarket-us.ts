@@ -177,7 +177,10 @@ export class PolymarketUsExecutor implements Executor {
       return this.eventsCache.events;
     }
     const events: UsEvent[] = [];
-    const maxPages = 5;
+    // ~1,450 active events as of 2026-07 — 20 pages covers the lot; the loop
+    // still stops early on a short page, and the 60s cache keeps request
+    // volume far under the public limit.
+    const maxPages = 20;
     for (let page = 0; page < maxPages; page++) {
       const params = new URLSearchParams({
         active: 'true',
