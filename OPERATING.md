@@ -16,14 +16,14 @@ The bot runs 24/7 — close your browser and walk away, it keeps scanning.
 
 Every ~5 seconds the engine:
 
-1. Pulls live prices from BitGet (crypto), Polymarket, and Kalshi (prediction markets).
+1. Pulls live prices from Polymarket US (QCEX) — the exchange holding Cesar's funds — and from global Polymarket as a data source.
 2. Runs two strategies:
-   - **Triangular** on BitGet — looks for round-trip mispricings inside one venue (USDT→BTC→ETH→USDT etc).
-   - **Prediction-pair** across Polymarket ↔ Kalshi — looks for the same outcome priced differently on both venues.
-3. Books a paper trade for any opportunity that clears the spread threshold (`MIN_SPREAD_PCT`, currently 0.05%).
+   - **US event arb** on Polymarket US — buys every outcome of a multi-outcome event when the basket costs less than the $1 guaranteed payout, net of QCEX fees. This is the only strategy that trades real money.
+   - **Intra-market YES+NO** on global Polymarket — same idea on a single two-sided market. Data-only: global Polymarket is not in `LIVE_VENUES`, so these can be watched but not traded.
+3. Trades any opportunity that clears the spread threshold (`MIN_SPREAD_PCT`) **and** routes entirely to live venues. An opportunity whose venues aren't live-routed is skipped, not simulated — see below.
 4. Persists trades, opportunities, and daily P&L to SQLite on the mounted volume.
 
-**Mode is `paper`.** No real money is at risk. Live order placement is v2 work.
+**Retired 2026-07-31:** BitGet triangular, Poly↔Kalshi prediction pairs, and cross-exchange spot. None of those venues are tradeable for a US client, so their "fills" were simulations that nonetheless consumed the real daily exposure cap and booked fake profit. Three independent guards now prevent a repeat: the scanners are unregistered, paper-routed opportunities are skipped whenever any venue is live, and simulated fills track their own exposure/P&L counters instead of the real ones.
 
 ---
 

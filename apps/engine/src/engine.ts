@@ -20,9 +20,6 @@ import {
   type Executor,
 } from '@cesar-arb/executors';
 import {
-  PredictionScanner,
-  TriangularScanner,
-  CrossExchangeScanner,
   PolyIntraMarketScanner,
   UsEventArbScanner,
   DEFAULT_TRIANGLES,
@@ -93,7 +90,23 @@ export class Engine {
   private liveRoutedVenues: Set<string> = new Set();
 
   private guard: RiskGuard;
+  /** Risk counters for real, money-moving trades. This is what the dashboard shows. */
   private state: ReturnType<typeof freshState>;
+  /**
+   * Separate counters for simulated trades. Paper fills used to increment the
+   * live exposure and P&L counters, so a simulation could exhaust the real
+   * daily risk budget and inflate reported profit. They are still capped —
+   * against the same limits — just out of the real money's way. In-memory
+   * only: there is nothing to reconcile after a restart.
+   */
+  private paperState: ReturnType<typeof freshState>;
+  /**
+   * Set when simulated losses hit the daily loss cap. Held separately from
+   * paperState.killSwitch because that field is rewritten every tick to
+   * mirror Cesar's global switch — flipping his switch back off must not
+   * silently resume paper trading that halted on its own limit.
+   */
+  private paperLossHalt = false;
 
   private currentOpportunities: Opportunity[] = [];
   private currentCandidates: Opportunity[] = [];
@@ -144,6 +157,7 @@ export class Engine {
     } else {
       this.state = freshState(this.config.startingEquityUsd);
     }
+    this.paperState = freshState(this.config.startingEquityUsd);
 
     this.buildVenues();
     this.buildScanners();
@@ -226,38 +240,31 @@ export class Engine {
     }
   }
 
+  /**
+   * Scanners that produce opportunities we could actually trade.
+   *
+   * Retired 2026-07-31 — BitGet triangular, Poly↔Kalshi prediction pairs, and
+   * cross-exchange spot. Every one of them scans a venue Cesar cannot trade on
+   * (BitGet/CEX spot are not US-available; the Kalshi pair was dropped
+   * 2026-06-29), so their legs always routed to paper executors. The engine
+   * then "filled" them for real in the ledger: on 2026-07-31 four simulated
+   * Poly↔Kalshi trades consumed $40 of the $50 daily exposure cap in the first
+   * ten minutes after the UTC reset, locking out live QCEX arbs for the rest
+   * of the day and booking ~$0.92 of fictional profit. Deleting them removes
+   * the candidate noise; the paper-routing gate in tick() and the split risk
+   * counters are the two independent backstops that make a repeat impossible.
+   *
+   * To bring one back, re-register it here AND add its venue to LIVE_VENUES —
+   * a scanner whose venues aren't live-routed can no longer trade at all.
+   */
   private buildScanners() {
     this.scanners = [
-      new TriangularScanner({
-        executor: this.bitget,
-        venue: 'bitget',
-        feeBps: 10,
-        minEdgePct: this.config.limits.minSpreadPct,
-        sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
-      }),
-      new PredictionScanner({
-        polymarket: this.polymarket,
-        kalshi: this.kalshi,
-        minEdgePct: this.config.limits.minSpreadPct,
-        sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
-        matchMode: this.config.predictionMatchMode,
-      }),
-      new CrossExchangeScanner({
-        venues: this.cexSpot.map((e) => ({
-          venue: e.venue,
-          executor: e,
-          quoteCcy: e.quoteCcy,
-        })),
-        assets: CROSS_EXCHANGE_ASSETS,
-        minEdgePct: this.config.limits.minSpreadPct,
-        sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
-        feeBps: 10,
-      }),
-      // Single-venue Polymarket YES+NO arb. The one strategy that runs on the
-      // funds Cesar actually holds (Polymarket only) now that the Poly↔Kalshi
-      // pair is retired. Reads the live CLOB book; legs route to the same
-      // Polymarket executor used by the prediction scanner, so it inherits the
-      // live/dry-run safety gates with no extra wiring.
+      // Single-venue YES+NO arb on global Polymarket. Data-only while
+      // LIVE_VENUES is polymarket-us: it reads the live CLOB book and surfaces
+      // real signals on the dashboard, but its legs are not live-routed, so
+      // the gate in tick() skips rather than trades them. Kept registered
+      // because global Polymarket is the natural second venue if Cesar ever
+      // funds one — add 'polymarket' to LIVE_VENUES and it goes live as-is.
       new PolyIntraMarketScanner({
         polymarket: this.polymarket,
         minEdgePct: this.config.limits.minSpreadPct,
@@ -300,6 +307,20 @@ export class Engine {
     }
     if (anyLive && anyPaper) return 'mixed';
     return anyLive ? 'live' : 'paper';
+  }
+
+  /**
+   * How this trade must be recorded, which is also whether real money moves.
+   * A live-routed trade under EXECUTION_DRY_RUN is signed but never sent, so
+   * it is a paper trade in every sense that matters here.
+   */
+  private ledgerModeFor(routing: 'live' | 'paper'): TradingMode {
+    return routing === 'live' && this.config.execution.dryRun ? 'paper' : routing;
+  }
+
+  /** Real-money counters for live trades, shadow counters for simulated ones. */
+  private riskStateFor(mode: TradingMode): ReturnType<typeof freshState> {
+    return mode === 'live' ? this.state : this.paperState;
   }
 
   /** Start the scan loop. Returns immediately. */
@@ -514,6 +535,8 @@ export class Engine {
     this.storage.resetTradeHistory();
     this.recentFires.clear();
     this.state = freshState(this.config.startingEquityUsd);
+    this.paperState = freshState(this.config.startingEquityUsd);
+    this.paperLossHalt = false;
     this.tradedCount = 0;
     this.scannedCount = 0;
     this.candidateCount = 0;
@@ -533,6 +556,11 @@ export class Engine {
     try {
       this.state = maybeResetForNewDay(this.state, this.config.startingEquityUsd);
       this.state.killSwitch = this.killSwitch;
+      const paperBefore = this.paperState;
+      this.paperState = maybeResetForNewDay(this.paperState, this.config.startingEquityUsd);
+      if (this.paperState !== paperBefore) this.paperLossHalt = false;
+      // Cesar's kill switch stops everything, simulated trades included.
+      this.paperState.killSwitch = this.killSwitch || this.paperLossHalt;
 
       const candidates: Opportunity[] = [];
       for (const scanner of this.scanners) {
@@ -584,7 +612,20 @@ export class Engine {
           );
           continue;
         }
-        const decision = this.guard.evaluate(opp, this.state);
+        // Once ANY venue is live-routed, a paper-routed opportunity is not a
+        // trade — it is a simulation the ledger would record as a completed
+        // position with invented P&L. Skip it outright rather than "filling"
+        // it. (With LIVE_VENUES empty the engine is a pure paper/demo rig and
+        // simulating is the whole point, so the gate only applies when real
+        // money is in play somewhere.)
+        if (routing === 'paper' && this.liveRoutedVenues.size > 0) {
+          this.logger.debug(
+            { opp: opp.id, strategy: opp.strategy, venues: opp.legs.map((l) => l.venue) },
+            'skip: no live-routed venue for this opportunity — not simulating a fill',
+          );
+          continue;
+        }
+        const decision = this.guard.evaluate(opp, this.riskStateFor(this.ledgerModeFor(routing)));
         if (!decision.allowed) {
           this.logger.debug({ opp: opp.id, reason: decision.reason }, 'skip');
           continue;
@@ -647,19 +688,18 @@ export class Engine {
   }
 
   private async executeOpportunity(opp: Opportunity, routing: 'live' | 'paper' = 'paper'): Promise<void> {
-    const sizeUsd = this.guard.sizeFor(opp, this.state);
+    // Label by how this trade ACTUALLY executes, then size it against the
+    // matching set of counters, so a simulation can never spend the real
+    // daily budget.
+    const mode = this.ledgerModeFor(routing);
+    const risk = this.riskStateFor(mode);
+    const sizeUsd = this.guard.sizeFor(opp, risk);
     const trade: Trade = {
       id: newTradeId(),
       opportunityId: opp.id,
       strategy: opp.strategy,
       assetClass: opp.assetClass,
-      // Label by how this trade ACTUALLY executed, not by the global mode.
-      // In live mode the retired scanners (BitGet triangular, cross-exchange)
-      // still route entirely to paper executors; recording those as 'live'
-      // would show Cesar simulated P&L as if it were real money. Same rule
-      // for EXECUTION_DRY_RUN: the live executor returns simulated fills, so
-      // no money moved and the record must say 'paper'.
-      mode: routing === 'live' && this.config.execution.dryRun ? 'paper' : routing,
+      mode,
       status: 'open',
       fills: [],
       notionalUsd: 0,
@@ -735,14 +775,21 @@ export class Engine {
     trade.status = 'closed';
     trade.closedAt = Date.now();
 
-    this.state.exposureTodayUsd += sizeUsd;
-    this.state.realizedPnlTodayUsd += pnl;
+    risk.exposureTodayUsd += sizeUsd;
+    risk.realizedPnlTodayUsd += pnl;
 
-    // Trip kill switch if daily loss cap hit.
-    const lossPct = (-this.state.realizedPnlTodayUsd / Math.max(this.state.startingEquityUsd, 1)) * 100;
+    // Trip kill switch if daily loss cap hit. A simulated loss halts further
+    // simulation but must not touch the real kill switch — no money was lost.
+    const lossPct = (-risk.realizedPnlTodayUsd / Math.max(risk.startingEquityUsd, 1)) * 100;
     if (lossPct >= this.config.limits.maxDailyLossPct) {
-      this.setKillSwitch(true);
-      this.logger.error({ lossPct }, 'daily loss cap hit, kill switch engaged');
+      if (mode === 'live') {
+        this.setKillSwitch(true);
+        this.logger.error({ lossPct }, 'daily loss cap hit, kill switch engaged');
+      } else {
+        this.paperLossHalt = true;
+        risk.killSwitch = true;
+        this.logger.warn({ lossPct }, 'simulated daily loss cap hit — paper trading halted for today');
+      }
     }
 
     this.storage.recordTrade(trade);
