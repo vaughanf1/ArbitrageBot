@@ -103,7 +103,15 @@ export default function CommandPage() {
         <Kpi label="P&L Today" value={status ? fmtUsd(pnl, { signed: true }) : '—'} sub="booked · paper" tone={pnl >= 0 ? 'gold' : 'neg'} />
         <Kpi label="Exposure" value={status ? fmtUsd(status.exposureTodayUsd) : '—'} sub={status ? `${exposurePct.toFixed(0)}% of ${fmtUsd(cap)} cap` : '—'} />
         <Kpi label="Positions to enter" value={String(positions.length)} sub={`clear ${fmtPct(minSpread)} edge`} tone="gold" />
-        <Kpi label="Candidates" value={status ? fmtCount(status.candidateCount) : '—'} sub="evaluated · session" />
+        {/* Buying power, not candidate count — candidates already appear in the
+            ticker strip and the funnel below, and an account with no cash
+            cannot trade at all however many candidates it finds. */}
+        <Kpi
+          label="Buying power"
+          value={status?.buyingPowerUsd != null ? fmtUsd(status.buyingPowerUsd) : '—'}
+          sub={status?.buyingPowerUsd != null && status.buyingPowerUsd < 1 ? 'no cash — cannot trade' : 'cash available now'}
+          tone={status?.buyingPowerUsd != null && status.buyingPowerUsd < 1 ? 'neg' : undefined}
+        />
         <Kpi label="Trades filled" value={status ? fmtCount(status.tradedCount) : '—'} sub="this session" />
         <Kpi label="Best edge" value={bestEdge ? fmtPct(bestEdge) : '—'} sub="top live signal" tone="gold" />
       </section>

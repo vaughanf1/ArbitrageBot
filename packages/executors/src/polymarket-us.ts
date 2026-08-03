@@ -81,6 +81,8 @@ export class PolymarketUsExecutor implements Executor {
   /** Extra allowance (bps) past the leg price so a limit-IOC order crosses. */
   private readonly slippageBps: number;
   private eventsCache: { events: UsEvent[]; cachedAt: number } | null = null;
+  private balanceCache: { usd: number; cachedAt: number } | null = null;
+  private readonly balanceCacheMs = 30_000;
   // Events (market listings) change slowly; books are fetched fresh each
   // scan. 60s keeps us far under the public 20 req/s limit.
   private readonly eventsCacheMs = 60_000;
@@ -143,13 +145,29 @@ export class PolymarketUsExecutor implements Executor {
     });
   }
 
-  /** USD buying power in Cesar's US account. Used for go-live sanity checks. */
+  /**
+   * USD buying power in Cesar's US account, cached ~30s.
+   *
+   * This is a pre-trade gate, not just a sanity check. When the account runs
+   * out of cash the exchange rejects orders with a bare HTTP 400 whose message
+   * is the generic "The server was unable to process your request." — reading
+   * the balance first is the only way to report the real reason.
+   */
   async buyingPowerUsd(): Promise<number> {
+    const cached = this.balanceCache;
+    if (cached && Date.now() - cached.cachedAt < this.balanceCacheMs) return cached.usd;
     const res = await this.authedFetch('GET', '/v1/account/balances');
     if (!res.ok) throw new Error(`polymarket-us balances HTTP ${res.status}`);
     const data = (await res.json()) as { balances?: { buyingPower?: number; currency?: string }[] };
     const usd = (data.balances ?? []).find((b) => b.currency === 'USD');
-    return usd?.buyingPower ?? 0;
+    const value = usd?.buyingPower ?? 0;
+    this.balanceCache = { usd: value, cachedAt: Date.now() };
+    return value;
+  }
+
+  /** Drop the cached balance so the next check re-reads it (post-trade). */
+  invalidateBalance(): void {
+    this.balanceCache = null;
   }
 
   /**
@@ -339,9 +357,26 @@ export class PolymarketUsExecutor implements Executor {
         // tells us the actual fill instead of requiring a follow-up poll.
         synchronousExecution: true,
       });
-      const data = (await res.json().catch(() => ({}))) as UsCreateOrderResponse;
+      const bodyText = await res.text();
+      const data = (JSON.parse(bodyText || '{}') as UsCreateOrderResponse) ?? {};
       if (!res.ok) {
-        return { ok: false, error: `polymarket-us: order HTTP ${res.status}: ${data.message ?? ''}` };
+        // QCEX returns a bare "The server was unable to process your request."
+        // for most order faults, including an account with no cash. Carry the
+        // status code and the raw body through so the ledger records something
+        // a human can act on, and name the balance case explicitly — it is by
+        // far the most common cause and the only one the bot can pre-empt.
+        let hint = '';
+        try {
+          const bp = await this.buyingPowerUsd();
+          const cost = qty * limitPrice;
+          if (bp < cost) hint = ` — insufficient buying power: $${bp.toFixed(2)} available, order needs $${cost.toFixed(2)}`;
+        } catch {
+          /* balance lookup is best-effort; never mask the original error */
+        }
+        return {
+          ok: false,
+          error: `polymarket-us: order HTTP ${res.status}: ${bodyText.slice(0, 200)}${hint}`,
+        };
       }
       // Every execution carries `orderRejectReason` even on success — it is a
       // protobuf enum whose zero value serializes as

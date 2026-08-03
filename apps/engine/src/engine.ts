@@ -113,6 +113,17 @@ export class Engine {
   private loopHandle: NodeJS.Timeout | null = null;
   private reconcileHandle: NodeJS.Timeout | null = null;
   private lastReconciliation: EngineStatus['reconciliation'] = null;
+  /**
+   * Market slugs we already hold on the exchange, refreshed by reconciliation.
+   * A prediction position cannot be recycled — it pays out only when the event
+   * resolves, which for the NFL markets is January 2027 — so re-entering an
+   * event we already hold just concentrates the whole account in one bet. The
+   * bot bought the same NFC East basket seven times over four days before this
+   * guard existed, and that is what exhausted Cesar's buying power.
+   */
+  private heldUsSlugs: Set<string> = new Set();
+  /** Buying power at the last check, surfaced in /api/status. null = unknown. */
+  private buyingPowerUsd: number | null = null;
 
   /**
    * Recently-fired opportunity fingerprints with the timestamp of the most
@@ -318,6 +329,36 @@ export class Engine {
     return routing === 'live' && this.config.execution.dryRun ? 'paper' : routing;
   }
 
+  /**
+   * Can the US account actually fund this basket? Checks the exchange's own
+   * buying power against what the legs will cost, so an underfunded account
+   * reports one clear line instead of an opaque HTTP 400 per attempt.
+   * Non-polymarket-us opportunities are always allowed through.
+   */
+  private async canAfford(opp: Opportunity): Promise<{ ok: boolean; reason?: string }> {
+    if (!opp.legs.some((l) => l.venue === 'polymarket-us')) return { ok: true };
+    let available: number;
+    try {
+      available = await this.polymarketUs.buyingPowerUsd();
+    } catch (err) {
+      // Balance unreadable — let the order attempt proceed and surface the
+      // exchange's own answer rather than blocking on a transient API fault.
+      this.logger.warn({ err: (err as Error).message }, 'buying power check failed');
+      return { ok: true };
+    }
+    this.buyingPowerUsd = available;
+    const cost = opp.legs
+      .filter((l) => l.venue === 'polymarket-us' && l.side === 'buy')
+      .reduce((s, l) => s + l.price * l.qty, 0);
+    if (available < cost) {
+      return {
+        ok: false,
+        reason: `buying power $${available.toFixed(2)} < basket cost $${cost.toFixed(2)} — deposit funds or wait for open positions to resolve`,
+      };
+    }
+    return { ok: true };
+  }
+
   /** Real-money counters for live trades, shadow counters for simulated ones. */
   private riskStateFor(mode: TradingMode): ReturnType<typeof freshState> {
     return mode === 'live' ? this.state : this.paperState;
@@ -409,6 +450,16 @@ export class Engine {
         mismatches.push({ marketSlug: slug, ledgerNet: ledger, exchangeNet: actual });
       }
     }
+    // Markets we already hold. Feeds the concentration guard in tick().
+    this.heldUsSlugs = new Set(exchange.map((p) => p.marketSlug));
+    // Refresh buying power on the same cadence so the dashboard shows it even
+    // when no opportunity fires — an account with no cash should say so.
+    this.polymarketUs.invalidateBalance();
+    try {
+      this.buyingPowerUsd = await this.polymarketUs.buyingPowerUsd();
+    } catch {
+      /* leave the last known value; the next cycle retries */
+    }
     this.lastReconciliation = { at: Date.now(), ok: mismatches.length === 0, mismatches };
     if (mismatches.length > 0) {
       this.logger.warn(
@@ -491,6 +542,7 @@ export class Engine {
       tradedCount: this.tradedCount,
       realizedPnlTodayUsd: this.state.realizedPnlTodayUsd,
       exposureTodayUsd: this.state.exposureTodayUsd,
+      buyingPowerUsd: this.buyingPowerUsd,
       limits: this.config.limits,
       lastScanAt: this.lastScanAt,
       lastScanMs: this.lastScanMs,
@@ -636,6 +688,29 @@ export class Engine {
           this.logger.debug({ opp: opp.id, fp, ageMs: Date.now() - firedAt }, 'skip duplicate');
           continue;
         }
+        // CONCENTRATION: a prediction position only pays out when the event
+        // resolves, so buying more of an event we already hold locks up more
+        // capital in the same bet rather than compounding a repeatable edge.
+        const alreadyHeld = opp.legs
+          .map((l) => l.symbol.split(':')[0] ?? l.symbol)
+          .filter((slug) => this.heldUsSlugs.has(slug));
+        if (routing === 'live' && alreadyHeld.length > 0) {
+          this.logger.info(
+            { opp: opp.id, alreadyHeld },
+            'skip: already holding this event — capital stays locked until it resolves, so re-entering only concentrates the position',
+          );
+          continue;
+        }
+        // BUYING POWER: without this the exchange rejects the first leg with a
+        // bare HTTP 400 and the bot writes a failed trade every dedupe window,
+        // for days, with nothing on the dashboard explaining why.
+        if (routing === 'live' && !this.config.execution.dryRun) {
+          const affordable = await this.canAfford(opp);
+          if (!affordable.ok) {
+            this.logger.warn({ opp: opp.id, reason: affordable.reason }, 'skip: cannot fund this trade');
+            continue;
+          }
+        }
         this.recentFires.set(fp, Date.now());
         await this.executeOpportunity(opp, routing);
         break; // one trade per tick keeps things tidy in v1
@@ -756,15 +831,40 @@ export class Engine {
       // A failed live attempt is exactly when hidden fills can appear —
       // re-check the exchange immediately rather than waiting for the timer.
       if (routing === 'live' && !this.config.execution.dryRun) {
-        this.reconcileUsPositions().catch((e) =>
+        this.polymarketUs.invalidateBalance();
+      this.reconcileUsPositions().catch((e) =>
           this.logger.error({ err: (e as Error).message }, 'post-trade reconciliation failed'),
         );
       }
       return;
     }
 
+    // PARTIAL-FILL SAFETY, PART 2: every leg returned ok, but an IOC order can
+    // come back with FEWER contracts than we asked for and that still counts as
+    // a fill. A basket is only hedged up to its thinnest leg, so the surplus on
+    // every other leg is a naked directional bet.
+    //
+    // This is what quietly happened on 2026-08-01: a basket filled
+    // 10/10/3.93/0.07 contracts, was recorded as a complete arb, and booked
+    // +$2.71 of profit it had not made. Sell the surplus back down to the
+    // common fill ratio so what remains is genuinely hedged.
+    const hedgedRatio = await this.trimToHedgedRatio(filledLegs, fills, trade);
+
     trade.fills = fills;
-    trade.notionalUsd = fills.reduce((s, f) => s + f.price * f.qty, 0);
+    trade.notionalUsd = fills.reduce((s, f) => s + (f.side === 'buy' ? 1 : -1) * f.price * f.qty, 0);
+
+    // Trimmed to nothing: the book was too thin to build any hedge, so this
+    // was never an arb. Record it as failed rather than as a closed position.
+    if (hedgedRatio < 0.05) {
+      trade.pnlUsd = computeRealizedPnl(opp, fills);
+      trade.status = 'failed';
+      trade.reasoning = `${trade.reasoning} | ABORTED: legs filled too unevenly to hedge (best hedged ratio ${(hedgedRatio * 100).toFixed(1)}%) — surplus sold back`;
+      trade.closedAt = Date.now();
+      this.storage.recordTrade(trade);
+      this.tradedCount += 1;
+      risk.realizedPnlTodayUsd += trade.pnlUsd;
+      return;
+    }
 
     // For both triangular and prediction-pair the trade closes immediately
     // in v1: triangular returns to the quote currency in a single tick, and
@@ -834,6 +934,87 @@ export class Engine {
     }
   }
 
+  /**
+   * Sell every leg's surplus back down to the common fill ratio.
+   *
+   * An IOC leg can fill short of what we asked for, and the exchange reports
+   * that as a successful (partial) fill. The hedge only holds up to the
+   * thinnest leg, so everything above it is naked directional risk. Trimming
+   * costs the bid/ask spread on the surplus — that is the honest price of an
+   * incomplete basket, and far cheaper than carrying the exposure to
+   * settlement.
+   *
+   * `fills` is index-aligned with `legs` on entry; trim sells are appended, so
+   * computeRealizedPnl (which nets by symbol) values the round trip correctly.
+   * Returns the hedged fraction actually achieved, 0..1.
+   */
+  private async trimToHedgedRatio(
+    legs: OpportunityLeg[],
+    fills: Fill[],
+    trade: Trade,
+  ): Promise<number> {
+    if (legs.length < 2) return 1;
+    const entryFills = fills.slice(0, legs.length);
+    let target = Infinity;
+    for (let i = 0; i < legs.length; i++) {
+      const requested = legs[i]?.qty ?? 0;
+      const filled = entryFills[i]?.qty ?? 0;
+      target = Math.min(target, requested > 0 ? filled / requested : 0);
+    }
+    if (!isFinite(target)) target = 0;
+    // Within a hair of fully filled: nothing worth selling.
+    if (target >= 0.99) return target;
+
+    this.logger.warn(
+      {
+        trade: trade.id,
+        hedgedRatio: Number(target.toFixed(4)),
+        legs: legs.map((l, i) => ({
+          symbol: l.symbol,
+          requested: l.qty,
+          filled: entryFills[i]?.qty ?? 0,
+        })),
+      },
+      'partial fill across legs — selling the surplus back to the hedged ratio',
+    );
+
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i];
+      const fill = entryFills[i];
+      if (!leg || !fill) continue;
+      const keep = leg.qty * target;
+      const surplus = fill.qty - keep;
+      // Contracts are whole units; anything under one is dust the exchange
+      // would reject anyway.
+      if (surplus < 1) continue;
+      const exec = this.executorByVenue.get(leg.venue);
+      if (!exec) {
+        this.flagNakedPosition(trade, { ...leg, qty: surplus }, 'no executor available to trim surplus');
+        continue;
+      }
+      const opposite: OpportunityLeg = {
+        ...leg,
+        side: leg.side === 'buy' ? 'sell' : 'buy',
+        qty: surplus,
+      };
+      try {
+        const res = await exec.placeMarketOrder(opposite);
+        if (!res.ok || !res.fill) {
+          this.flagNakedPosition(trade, opposite, res.error ?? 'trim order rejected');
+          continue;
+        }
+        fills.push(res.fill);
+        this.logger.warn(
+          { trade: trade.id, leg: leg.symbol, surplus, price: res.fill.price },
+          'surplus trimmed',
+        );
+      } catch (err) {
+        this.flagNakedPosition(trade, opposite, (err as Error).message);
+      }
+    }
+    return target;
+  }
+
   /** A leg could not be unwound → real exposure. Halt trading, alert loudly. */
   private flagNakedPosition(trade: Trade, leg: OpportunityLeg, why: string): void {
     this.setKillSwitch(true);
@@ -900,11 +1081,28 @@ function computeRealizedPnl(opp: Opportunity, fills: Fill[]): number {
     return proceeds - outlay;
   }
   if (opp.strategy === 'prediction-pair') {
-    // Pay (price_a * qty_a) + (price_b * qty_b) for $1 payoff per pair.
-    const cost = fills.reduce((s, f) => s + f.price * f.qty + f.feeUsd, 0);
-    // qty represents number of $1-payoff contracts on each side; one side will pay.
-    const payoff = Math.min(fills[0]?.qty ?? 0, fills[1]?.qty ?? 0);
-    return payoff - cost;
+    // Exactly one leg of the outcome set pays $1, so the guaranteed payoff is
+    // the SMALLEST net position across every leg — a basket is only hedged up
+    // to its thinnest side.
+    //
+    // This used to read min(fills[0].qty, fills[1].qty), which is right for a
+    // two-leg YES/NO pair but silently wrong for the 3+ leg US event baskets:
+    // it ignored legs 3..n entirely. On 2026-08-01 a basket that filled
+    // 10/10/3.93/0.07 contracts was booked as +$2.71 profit when the real
+    // guaranteed payoff was $0.07 against $7.00 of cost.
+    //
+    // Netting by symbol also makes unwind sells subtract correctly, so a
+    // trimmed over-fill values at what it actually cost to get flat.
+    const net = new Map<string, number>();
+    let cash = 0;
+    for (const f of fills) {
+      const dir = f.side === 'buy' ? 1 : -1;
+      net.set(f.symbol, (net.get(f.symbol) ?? 0) + dir * f.qty);
+      cash += dir * f.price * f.qty + f.feeUsd;
+    }
+    if (net.size === 0) return 0;
+    const payoff = Math.min(...net.values());
+    return payoff - cash;
   }
   return 0;
 }

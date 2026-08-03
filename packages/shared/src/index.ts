@@ -161,6 +161,14 @@ export interface EngineStatus {
   realizedPnlTodayUsd: number;
   /** Today's deployed exposure in USD. */
   exposureTodayUsd: number;
+  /**
+   * Cash available to trade on the live venue, as the exchange reports it.
+   * Null until the first check, or when the venue isn't live. Distinct from
+   * exposure: capital sunk into unresolved prediction positions is neither
+   * exposure "today" nor available, and an account can be fully invested and
+   * unable to trade at all.
+   */
+  buyingPowerUsd: number | null;
   limits: RiskLimits;
   /** Unix ms of last completed scan. Null until first scan finishes. */
   lastScanAt: number | null;
