@@ -28,7 +28,16 @@ export const CRYPTO_SPOT_VENUES: Venue[] = [
 
 export type AssetClass = 'crypto' | 'prediction' | 'forex' | 'equity' | 'commodity';
 
-export type StrategyKind = 'triangular' | 'prediction-pair' | 'cross-exchange';
+export type StrategyKind =
+  | 'triangular'
+  | 'prediction-pair'
+  | 'cross-exchange'
+  /**
+   * Not a strategy — a bookkeeping entry that reconciles the ledger to the
+   * exchange's own position record. Carries synthetic zero-price fills whose
+   * only job is to correct net quantities, so it never contributes P&L.
+   */
+  | 'adjustment';
 
 export type TradingMode = 'paper' | 'live';
 

@@ -124,6 +124,27 @@ export async function createServer(opts: {
   });
 
   /**
+   * Admin: append one bookkeeping entry that brings recorded net positions in
+   * line with the exchange. Append-only — no historical row is edited, so a
+   * bad run is undone by deleting the returned trade id. Token-gated: it
+   * changes what the ledger claims Cesar owns.
+   */
+  fastify.post('/api/admin/reconcile-adjustment', async (req, reply) => {
+    const err = controlAuthError(req);
+    if (err) {
+      reply.code(err.code);
+      return { ok: false, error: err.error };
+    }
+    try {
+      const result = await opts.engine.applyReconciliationAdjustment();
+      return { ok: true, ...result };
+    } catch (e) {
+      reply.code(500);
+      return { ok: false, error: (e as Error).message };
+    }
+  });
+
+  /**
    * Admin: wipe trade history + reset daily state. One-shot for clearing
    * inflated paper-trade data left over from earlier bugs. Token-gated to
    * stop random callers from nuking the demo.

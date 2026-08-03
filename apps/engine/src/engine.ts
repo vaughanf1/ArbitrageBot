@@ -470,6 +470,91 @@ export class Engine {
   }
 
   /**
+   * Write one bookkeeping entry that brings the ledger's net position in each
+   * market to what the exchange actually holds.
+   *
+   * Append-only by design: no historical fill is edited, so the correction is
+   * auditable and undone by deleting a single row. The entry carries
+   * zero-price fills — it corrects quantities, never P&L, because the cash
+   * effect of the missing sells already happened in the account.
+   *
+   * Needed because unwind sells were dropped from trade records (fixed in
+   * executeOpportunity, but the old rows can't heal themselves): the exchange
+   * executed 120 Philadelphia / 60 Dallas / 50 Giants sells the ledger never
+   * saw, leaving reconciliation permanently red.
+   */
+  async applyReconciliationAdjustment(): Promise<{
+    applied: boolean;
+    entries: { marketSlug: string; ledgerNet: number; exchangeNet: number; correction: number }[];
+  }> {
+    const ledgerNet = new Map<string, number>();
+    for (const t of this.storage.liveTrades()) {
+      for (const f of t.fills) {
+        if (f.venue !== 'polymarket-us') continue;
+        const slug = f.symbol.split(':')[0] ?? f.symbol;
+        ledgerNet.set(slug, (ledgerNet.get(slug) ?? 0) + (f.side === 'buy' ? f.qty : -f.qty));
+      }
+    }
+    const exchange = await this.polymarketUs.openPositions();
+    const exchangeNet = new Map(exchange.map((p) => [p.marketSlug, p.netPosition]));
+    let activeSlugs: Set<string> | null = null;
+    try {
+      const events = await this.polymarketUs.listActiveEvents();
+      activeSlugs = new Set(events.flatMap((e) => e.markets.map((m) => m.slug)));
+    } catch {
+      activeSlugs = null;
+    }
+
+    const entries: { marketSlug: string; ledgerNet: number; exchangeNet: number; correction: number }[] = [];
+    const fills: Fill[] = [];
+    for (const slug of new Set([...ledgerNet.keys(), ...exchangeNet.keys()])) {
+      const ledger = ledgerNet.get(slug) ?? 0;
+      const actual = exchangeNet.get(slug) ?? 0;
+      // Settled markets vanish from the listing; their ledger rows are history,
+      // not a discrepancy.
+      if (actual === 0 && activeSlugs && !activeSlugs.has(slug)) continue;
+      const correction = actual - ledger;
+      if (Math.abs(correction) < 1e-6) continue;
+      entries.push({ marketSlug: slug, ledgerNet: ledger, exchangeNet: actual, correction });
+      fills.push({
+        venue: 'polymarket-us',
+        symbol: `${slug}:LONG`,
+        side: correction > 0 ? 'buy' : 'sell',
+        qty: Math.abs(correction),
+        price: 0,
+        feeUsd: 0,
+        filledAt: Date.now(),
+      });
+    }
+    if (entries.length === 0) return { applied: false, entries: [] };
+
+    const trade: Trade = {
+      id: newTradeId(),
+      opportunityId: 'reconciliation',
+      strategy: 'adjustment',
+      assetClass: 'prediction',
+      mode: 'live',
+      status: 'closed',
+      fills,
+      notionalUsd: 0,
+      pnlUsd: 0,
+      reasoning:
+        'LEDGER ADJUSTMENT — not a trade. Corrects recorded net positions to match the exchange, ' +
+        'which is the source of truth. The gap came from unwind sells that were executed on the ' +
+        'exchange but dropped from their trade records. Zero-price fills: quantities only, no P&L. ' +
+        entries
+          .map((e) => `${e.marketSlug}: ${e.ledgerNet.toFixed(2)} → ${e.exchangeNet.toFixed(2)}`)
+          .join('; '),
+      openedAt: Date.now(),
+      closedAt: Date.now(),
+    };
+    this.storage.recordTrade(trade);
+    this.logger.warn({ tradeId: trade.id, entries }, 'ledger adjusted to exchange positions');
+    await this.reconcileUsPositions();
+    return { applied: true, entries };
+  }
+
+  /**
    * Schedule the daily report send for 23:55 UTC. We fire just before
    * midnight (rather than at midnight) so that all of today's trades are
    * included before the daily state resets at 00:00 UTC. If the email
@@ -818,8 +903,13 @@ export class Engine {
       // PARTIAL-FILL SAFETY: a multi-leg arb where some legs filled and a later
       // one didn't leaves a naked, unhedged position. Unwind everything that
       // did fill before giving up.
+      // Unwind sells go into the SAME array the record is built from. They
+      // used to be pushed onto trade.fills, which the next line then replaced
+      // wholesale — so every unwind sell was silently dropped from the ledger.
+      // That is why the ledger shows 128.87 Philadelphia contracts against the
+      // exchange's 59: 120 real sells were executed and never recorded.
       if (filledLegs.length > 0) {
-        await this.unwindLegs(filledLegs, trade);
+        await this.unwindLegs(filledLegs, trade, fills);
       }
       trade.fills = fills;
       trade.notionalUsd = fills.reduce((s, f) => s + f.price * f.qty, 0);
@@ -908,7 +998,7 @@ export class Engine {
    * position is genuinely naked — we trip the kill-switch and log CRITICAL so
    * a human reconciles it. The unwind fills are appended to the trade record.
    */
-  private async unwindLegs(filledLegs: OpportunityLeg[], trade: Trade): Promise<void> {
+  private async unwindLegs(filledLegs: OpportunityLeg[], trade: Trade, into: Fill[]): Promise<void> {
     this.logger.error(
       { trade: trade.id, legs: filledLegs.length },
       'partial fill detected — unwinding filled legs to avoid a naked position',
@@ -926,7 +1016,7 @@ export class Engine {
           this.flagNakedPosition(trade, leg, res.error ?? 'unwind order rejected');
           continue;
         }
-        trade.fills.push(res.fill);
+        into.push(res.fill);
         this.logger.warn({ trade: trade.id, leg: leg.symbol, venue: leg.venue }, 'leg unwound');
       } catch (err) {
         this.flagNakedPosition(trade, leg, (err as Error).message);
