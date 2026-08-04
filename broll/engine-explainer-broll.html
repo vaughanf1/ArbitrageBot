@@ -1,0 +1,653 @@
+<title>Cesar Arb Engine &#8212; B-Roll Sequences</title>
+<style>
+  :root{
+    --ink:#050912; --panel:#0B1322; --panel-2:#0F1A2D;
+    --line:#1A2740; --line-hot:#27395E;
+    --text:#E9EFFA; --dim:#8195B3; --faint:#56688A;
+    --blue:#0A84FF; --blue-2:#5CB2FF;
+    --green:#2FD35E; --amber:#FFA318; --red:#FF4F42;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+  }
+  html,body{height:100%;}
+  body{
+    background:radial-gradient(130% 100% at 50% -25%,#0D1A31 0%,transparent 62%),var(--ink);
+    color:var(--text);font-family:var(--sans);overflow:hidden;display:grid;place-items:center;
+  }
+  #fit{position:fixed;inset:0;display:grid;place-items:center;}
+  #stage{width:1440px;height:810px;transform-origin:center;position:relative;}
+
+  .scene{position:absolute;inset:0;padding:56px 88px 98px;display:none;flex-direction:column;justify-content:center;}
+  .scene.on{display:flex;}
+
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--faint);display:flex;gap:12px;align-items:center;}
+  .eyebrow .num{color:var(--blue);}
+  h2{font-size:38px;font-weight:600;letter-spacing:-.028em;line-height:1.06;margin-top:14px;max-width:19ch;text-wrap:balance;}
+  h2 em{font-style:normal;color:var(--faint);}
+  .sub{margin-top:12px;font-size:15px;line-height:1.55;color:var(--dim);max-width:52ch;}
+
+  .num,.val,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+
+  /* ---------------- scene 1 : the edge ---------------- */
+  .s1grid{margin-top:44px;display:grid;grid-template-columns:1fr 300px;gap:70px;align-items:end;}
+  .s1rows{display:flex;flex-direction:column;gap:11px;}
+  .s1row{display:grid;grid-template-columns:180px 1fr 74px;align-items:center;gap:18px;}
+  .s1row .nm{font-size:14px;color:var(--dim);text-align:right;}
+  .s1track{height:32px;background:#0A1120;border:1px solid var(--line);border-radius:6px;position:relative;overflow:hidden;}
+  .s1fill{position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,#124A85,#1F76D6);border-right:1px solid var(--blue-2);}
+  .s1row .px{font-family:var(--mono);font-size:15px;color:var(--text);}
+  .s1rail{margin:38px 0 30px;position:relative;height:46px;}
+  .s1payoff{position:absolute;inset:0;border:1px dashed var(--line-hot);border-radius:7px;}
+  .s1cost{position:absolute;top:0;bottom:0;left:0;width:0;background:rgba(18,74,133,.32);border-right:1px solid var(--blue);border-radius:7px 0 0 7px;}
+  .s1gap{position:absolute;top:0;bottom:0;right:0;width:0;background:rgba(47,211,94,.2);border-left:1px solid var(--green);border-radius:0 7px 7px 0;}
+  .s1fee{position:absolute;top:0;bottom:0;width:0;background:rgba(255,79,66,.28);border-left:1px solid var(--red);}
+  .s1gap span{position:absolute;top:-24px;right:0;color:var(--green);}
+  .s1fee span{position:absolute;bottom:-24px;right:0;color:var(--red);}
+  .s1gap span,.s1fee span{font-family:var(--mono);font-size:12px;white-space:nowrap;}
+  .s1sum{display:flex;flex-direction:column;gap:6px;}
+  .s1sum .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);}
+  .s1sum .big{font-family:var(--mono);font-size:62px;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums;}
+  .s1sum .note{font-size:13px;color:var(--dim);line-height:1.5;min-height:40px;}
+
+  /* ---------------- scene 2 : the loop ---------------- */
+  .s2wrap{margin-top:16px;display:grid;grid-template-columns:1fr 470px;gap:60px;align-items:center;}
+  .s2ring{position:relative;width:470px;height:470px;justify-self:end;}
+  .s2ring svg{position:absolute;inset:0;overflow:visible;}
+  .s2core{position:absolute;inset:120px;border-radius:50%;display:grid;place-content:center;text-align:center;gap:6px;}
+  .s2core .big{font-family:var(--mono);font-size:52px;letter-spacing:-.04em;line-height:1;}
+  .s2core .lbl{font-family:var(--mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--faint);}
+  .s2station{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:5px;width:150px;text-align:center;}
+  .s2dot{width:11px;height:11px;border-radius:50%;background:#16243C;border:1px solid var(--line-hot);transition:none;}
+  .s2station .t{font-family:var(--mono);font-size:11px;color:var(--faint);}
+  .s2funnel{display:flex;flex-direction:column;gap:2px;}
+  .s2f{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:16px;padding:11px 0;border-bottom:1px solid var(--line);}
+  .s2f .v{font-family:var(--mono);font-size:30px;letter-spacing:-.03em;text-align:right;}
+  .s2f .k{font-size:13px;color:var(--dim);}
+  .s2f .k b{display:block;font-weight:400;font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-bottom:3px;}
+
+  /* ---------------- scene 3 : the gauntlet ---------------- */
+  .s3wrap{margin-top:38px;display:grid;grid-template-columns:1fr 420px;gap:64px;align-items:start;}
+  .s3lane{position:relative;display:flex;flex-direction:column;gap:8px;}
+  .s3gate{display:grid;grid-template-columns:26px 1fr auto;align-items:center;gap:14px;padding:11px 16px;border-radius:9px;
+          background:var(--panel);border:1px solid var(--line);}
+  .s3gate .i{font-family:var(--mono);font-size:10px;color:var(--line-hot);}
+  .s3gate .l{font-family:var(--mono);font-size:14px;letter-spacing:-.01em;}
+  .s3gate .l em{font-style:normal;display:block;font-family:var(--sans);font-size:11.5px;color:var(--faint);margin-top:3px;}
+  .s3gate .st{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--line-hot);}
+  .s3tok{position:absolute;left:-42px;width:16px;height:16px;border-radius:50%;background:var(--blue-2);
+         box-shadow:0 0 16px rgba(92,178,255,.9);opacity:0;}
+  .s3spine{position:absolute;left:-34px;top:0;bottom:0;width:1px;background:linear-gradient(180deg,transparent,var(--line),transparent);}
+  .s3side{display:flex;flex-direction:column;gap:22px;padding-top:6px;}
+  .s3verdict{font-family:var(--mono);font-size:13px;line-height:1.6;padding:18px 20px;border-radius:10px;border:1px solid var(--line);background:var(--panel);min-height:104px;}
+  .s3verdict .h{font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);margin-bottom:9px;}
+  .s3tally{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .s3t{padding:16px 18px;border-radius:10px;border:1px solid var(--line);background:var(--panel);}
+  .s3t b{display:block;font-family:var(--mono);font-size:34px;letter-spacing:-.03em;line-height:1;}
+  .s3t i{font-style:normal;font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);}
+
+  /* ---------------- scene 4 : the basket ---------------- */
+  .s4wrap{margin-top:40px;display:grid;grid-template-columns:1fr 320px;gap:64px;align-items:end;}
+  .s4rows{display:flex;flex-direction:column;gap:13px;position:relative;}
+  .s4row{display:grid;grid-template-columns:150px 1fr 120px;align-items:center;gap:18px;}
+  .s4row .nm{font-size:13.5px;color:var(--dim);text-align:right;}
+  .s4track{height:36px;border:1px dashed var(--line-hot);border-radius:6px;position:relative;}
+  .s4got{position:absolute;top:0;bottom:0;left:0;width:0;background:linear-gradient(90deg,#124A85,#1F76D6);border-radius:5px 0 0 5px;}
+  .s4surplus{position:absolute;top:0;bottom:0;width:0;background:linear-gradient(90deg,#8A5A0C,#B8791A);border-left:1px solid var(--amber);}
+  .s4row .q{font-family:var(--mono);font-size:13px;color:var(--faint);}
+  .s4hedge{position:absolute;top:-8px;bottom:-8px;width:2px;background:var(--green);opacity:0;box-shadow:0 0 14px rgba(47,211,94,.7);}
+  .s4hedge span{position:absolute;top:-24px;left:8px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);white-space:nowrap;}
+  .s4math{display:flex;flex-direction:column;gap:11px;}
+  .s4m{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:14px;padding-bottom:11px;border-bottom:1px solid var(--line);}
+  .s4m .k{color:var(--faint);font-size:11px;letter-spacing:.14em;text-transform:uppercase;}
+  .s4m.tot{border-bottom:0;padding-top:4px;}
+  .s4m.tot .v{font-size:30px;letter-spacing:-.03em;}
+
+  /* ---------------- scene 5 : fees ---------------- */
+  .s5wrap{margin-top:44px;display:flex;flex-direction:column;gap:34px;}
+  .s5case{display:grid;grid-template-columns:200px 1fr 190px;align-items:center;gap:28px;}
+  .s5case .cap{text-align:right;}
+  .s5case .cap .t{font-family:var(--mono);font-size:14px;}
+  .s5case .cap .d{font-size:12px;color:var(--faint);margin-top:4px;line-height:1.45;}
+  .s5bar{height:54px;position:relative;background:#0A1120;border:1px solid var(--line);border-radius:7px;overflow:hidden;}
+  .s5gross{position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,#12563A,#2FD35E);}
+  .s5feeblk{position:absolute;top:0;bottom:0;background:#C0362B;border-left:1px solid rgba(255,255,255,.22);width:0;}
+  .s5zero{position:absolute;top:-9px;bottom:-9px;width:1px;background:var(--line-hot);}
+  .s5out{font-family:var(--mono);font-size:26px;letter-spacing:-.03em;}
+  .s5out small{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);margin-top:5px;}
+
+  /* ---------------- scene 6 : reconciliation ---------------- */
+  .s6wrap{margin-top:40px;display:grid;grid-template-columns:1fr 300px;gap:56px;align-items:start;}
+  .s6table{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--panel);}
+  .s6head,.s6r{display:grid;grid-template-columns:1fr 120px 120px 116px;align-items:center;gap:0;padding:13px 20px;}
+  .s6head{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--line);background:#0A1120;}
+  .s6r{border-bottom:1px solid rgba(26,39,64,.6);font-family:var(--mono);font-size:14px;}
+  .s6r:last-child{border-bottom:0;}
+  .s6r .mk{font-family:var(--sans);font-size:13.5px;color:var(--dim);}
+  .s6r .n{text-align:right;padding-right:26px;font-variant-numeric:tabular-nums;}
+  .s6r .vd{text-align:right;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--line-hot);}
+  .s6scan{position:absolute;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--blue),transparent);opacity:0;box-shadow:0 0 18px rgba(10,132,255,.8);}
+  .s6side{display:flex;flex-direction:column;gap:16px;}
+  .s6card{border:1px solid var(--line);border-radius:10px;padding:18px 20px;background:var(--panel);}
+  .s6card .h{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);margin-bottom:10px;}
+  .s6card p{font-size:13px;line-height:1.6;color:var(--dim);}
+  .s6card .big{font-family:var(--mono);font-size:30px;letter-spacing:-.03em;}
+
+  /* ---------------- chrome ---------------- */
+  #rail{position:absolute;left:88px;right:88px;bottom:30px;display:flex;gap:8px;align-items:center;transition:opacity .3s;}
+  .chip{flex:1;position:relative;height:30px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#080E1A;cursor:pointer;}
+  .chip .bar{position:absolute;inset:0 auto 0 0;width:0;background:rgba(10,132,255,.16);}
+  .chip .tx{position:absolute;inset:0;display:flex;align-items:center;padding:0 11px;gap:9px;
+            font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);}
+  .chip.act{border-color:var(--line-hot);} .chip.act .tx{color:var(--text);}
+  #hint{position:absolute;right:88px;top:34px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;
+        text-transform:uppercase;color:var(--line-hot);transition:opacity .3s;}
+  body.bare #rail,body.bare #hint{opacity:0;pointer-events:none;}
+</style>
+
+<div id="fit"><div id="stage">
+
+  <div id="hint">1&#8211;6 scene &#183; &#8592; &#8594; step &#183; space pause &#183; h hide</div>
+
+  <!-- 01 &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472; -->
+  <section class="scene" id="sc1">
+    <div class="eyebrow"><span class="num">01</span>What an arbitrage actually is</div>
+    <h2>Buy every outcome. <em>One of them has to pay $1.</em></h2>
+    <div class="sub">Each outcome of an event trades on its own book. When the asks add up to less than a dollar, the whole basket is worth exactly a dollar at settlement &#8212; whoever wins.</div>
+    <div class="s1grid">
+      <div>
+        <div class="s1rows" id="s1rows"></div>
+        <div class="s1rail">
+          <div class="s1payoff"></div>
+          <div class="s1cost" id="s1cost"></div>
+          <div class="s1gap" id="s1gap"><span id="s1gaptx"></span></div>
+          <div class="s1fee" id="s1fee"><span></span></div>
+        </div>
+      </div>
+      <div class="s1sum">
+        <div class="lbl">Basket cost</div>
+        <div class="big" id="s1sum">$0.000</div>
+        <div class="note" id="s1note"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472; -->
+  <section class="scene" id="sc2">
+    <div class="eyebrow"><span class="num">02</span>The scan loop &#183; every 5 seconds</div>
+    <h2>A thousand markets in. <em>Two worth a look.</em></h2>
+    <div class="s2wrap">
+      <div class="s2funnel" id="s2funnel"></div>
+      <div class="s2ring" id="s2ring">
+        <svg viewBox="0 0 470 470">
+          <circle cx="235" cy="235" r="150" fill="none" stroke="#1A2740" stroke-width="1"/>
+          <circle cx="235" cy="235" r="150" fill="none" stroke="#0A84FF" stroke-width="2"
+                  stroke-linecap="round" id="s2arc" stroke-dasharray="120 823" opacity=".85" transform="rotate(-90 235 235)"/>
+        </svg>
+        <div class="s2core">
+          <div class="big" id="s2tick">0</div>
+          <div class="lbl">tick</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472; -->
+  <section class="scene" id="sc3">
+    <div class="eyebrow"><span class="num">03</span>Six gates, in order</div>
+    <h2>Nearly everything gets killed <em>on purpose.</em></h2>
+    <div class="s3wrap">
+      <div class="s3lane" id="s3lane">
+        <div class="s3spine"></div>
+        <div class="s3tok" id="s3tok"></div>
+      </div>
+      <div class="s3side">
+        <div class="s3verdict" id="s3verdict"><div class="h">Decision</div><div id="s3vtx"></div></div>
+        <div class="s3tally">
+          <div class="s3t"><b id="s3rej" style="color:var(--red)">0</b><i>rejected</i></div>
+          <div class="s3t"><b id="s3pass" style="color:var(--green)">0</b><i>fired</i></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472; -->
+  <section class="scene" id="sc4">
+    <div class="eyebrow"><span class="num">04</span>Firing the basket &#183; 1 Aug</div>
+    <h2>Four legs go out. <em>They don't come back even.</em></h2>
+    <div class="sub">A basket is only hedged up to its thinnest leg. Everything above that line is a naked bet &#8212; so it gets sold straight back.</div>
+    <div class="s4wrap">
+      <div class="s4rows" id="s4rows"><div class="s4hedge" id="s4hedge"><span>hedged ratio &#183; 0.7%</span></div></div>
+      <div class="s4math" id="s4math"></div>
+    </div>
+  </section>
+
+  <!-- 05 &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472; -->
+  <section class="scene" id="sc5">
+    <div class="eyebrow"><span class="num">05</span>Why most "free money" isn't</div>
+    <h2>The exchange takes a bite <em>out of every leg.</em></h2>
+    <div class="sub">Commission runs about 0.06 &#215; price &#215; (1 &#8722; price) per contract, per leg. On a four-leg basket that is charged four times &#8212; which is how a 2% edge becomes a loss.</div>
+    <div class="s5wrap" id="s5wrap"></div>
+  </section>
+
+  <!-- 06 &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472; -->
+  <section class="scene" id="sc6">
+    <div class="eyebrow"><span class="num">06</span>Reconciliation &#183; every 10 minutes</div>
+    <h2>The exchange is the truth. <em>The ledger has to match it.</em></h2>
+    <div class="s6wrap">
+      <div class="s6table" id="s6table">
+        <div class="s6head"><span>Market</span><span class="n" style="text-align:right;padding-right:26px">Ledger</span><span class="n" style="text-align:right;padding-right:26px">Exchange</span><span style="text-align:right">Status</span></div>
+        <div id="s6rows"></div>
+        <div class="s6scan" id="s6scan"></div>
+      </div>
+      <div class="s6side">
+        <div class="s6card"><div class="h">Drift found</div><div class="big" id="s6drift" style="color:var(--faint)">&#8212;</div><p id="s6dtx" style="margin-top:8px">Comparing every live fill against the positions the exchange actually holds.</p></div>
+        <div class="s6card"><div class="h">Correction</div><p id="s6fix">Nothing to do. A mismatch writes one append-only adjustment entry &#8212; quantities only, never P&amp;L.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <div id="rail"></div>
+</div></div>
+
+<script>
+(() => {
+  const stage = document.getElementById("stage");
+  const $ = s => document.querySelector(s);
+  const $$ = s => [...document.querySelectorAll(s)];
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const fit = () => stage.style.transform = `scale(${Math.min(innerWidth/1440, innerHeight/810)})`;
+  addEventListener("resize", fit); fit();
+
+  /* timing helpers \u2014 every scene is a pure function of its phase in seconds */
+  const clamp = (v,a,b) => v<a?a:v>b?b:v;
+  const win = (p,a,b) => clamp((p-a)/(b-a),0,1);
+  const ease = t => t<.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2;
+  const out = t => 1-Math.pow(1-t,3);
+  const money = v => "$"+v.toFixed(2);
+  const px = v => v.toFixed(2)+"px";
+  const fade = (el,v) => el.style.opacity = v;
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 01 \u2014 the edge \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S1 = (() => {
+    const OUT = [["Philadelphia Eagles",.300],["Dallas Cowboys",.265],["Washington Commanders",.180],["New York Giants",.160]];
+    const COST = OUT.reduce((s,o)=>s+o[1],0);          // 0.943
+    const FEE  = OUT.reduce((s,o)=>s+.06*o[1]*(1-o[1]),0);
+    const rows = OUT.map(([nm,p]) => {
+      const r = document.createElement("div"); r.className="s1row";
+      r.innerHTML = `<span class="nm">${nm}</span><span class="s1track"><span class="s1fill"></span></span><span class="px">$0.000</span>`;
+      $("#s1rows").appendChild(r);
+      return {p, fill:r.querySelector(".s1fill"), px:r.querySelector(".px"), row:r};
+    });
+    return {len:10, update(p){
+      let sum=0;
+      rows.forEach((r,i)=>{
+        const k = out(win(p, .5+i*.42, 1.25+i*.42));
+        r.fill.style.width = (r.p*100*k)+"%";
+        r.px.textContent = "$"+(r.p*k).toFixed(3);
+        r.row.style.opacity = .35 + .65*win(p,.35+i*.42,.7+i*.42);
+        sum += r.p*k;
+      });
+      $("#s1sum").textContent = "$"+sum.toFixed(3);
+      $("#s1sum").style.color = sum>0 && sum<1 && p>2.6 ? "var(--green)" : "var(--text)";
+
+      const rail = out(win(p,2.7,3.5));
+      $("#s1cost").style.width = (COST*100*rail)+"%";
+      const gap = out(win(p,3.5,4.2));
+      $("#s1gap").style.width = ((1-COST)*100*gap)+"%";
+      $("#s1gaptx").textContent = gap>.7 ? "+"+((1-COST)*100).toFixed(1)+"\u00a2 gross" : "";
+      const fee = out(win(p,5.2,5.9));
+      const f = $("#s1fee");
+      f.style.right = "0%"; f.style.left = "auto";
+      f.style.width = (FEE*100*fee)+"%";
+      f.firstElementChild.textContent = fee>.7 ? "\u2212"+(FEE*100).toFixed(1)+"\u00a2 fees" : "";
+
+      const note = $("#s1note");
+      if(p<3.5) note.innerHTML = "";
+      else if(p<5.2) note.innerHTML = `A dollar of payoff for <b class="mono">$${COST.toFixed(3)}</b>.`;
+      else note.innerHTML = `A dollar of payoff for <b class="mono">$${COST.toFixed(3)}</b>, minus <b class="mono">${(FEE*100).toFixed(1)}\u00a2</b> of commission.<br><span style="color:var(--green)">Net edge ${(((1-COST-FEE)/COST)*100).toFixed(2)}%.</span>`;
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 02 \u2014 the loop \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S2 = (() => {
+    const ST = ["list active events","group by market type","fetch top of book","sum the asks","net out fees","rank and gate"];
+    const ring = $("#s2ring"), R = 150, C = 235;
+    const dots = ST.map((t,i) => {
+      const a = -Math.PI/2 + i*(Math.PI*2/ST.length);
+      const d = document.createElement("div"); d.className="s2station";
+      d.style.left = (C + Math.cos(a)*(R+52))/470*100+"%";
+      d.style.top  = (C + Math.sin(a)*(R+52))/470*100+"%";
+      d.innerHTML = `<span class="s2dot"></span><span class="t">${t}</span>`;
+      ring.appendChild(d);
+      return {dot:d.querySelector(".s2dot"), tx:d.querySelector(".t")};
+    });
+    const F = [["1,284","markets polled","polymarket US \u00b7 QCEX"],
+               ["312","baskets grouped","same-type outcome sets"],
+               ["38","priced in full","every leg had a fillable ask"],
+               ["2","cleared the edge","after commission"]];
+    const fr = F.map(([v,k,s]) => {
+      const d = document.createElement("div"); d.className="s2f";
+      d.innerHTML = `<span class="v">0</span><span class="k"><b>${k}</b>${s}</span>`;
+      $("#s2funnel").appendChild(d);
+      return {el:d, v:d.querySelector(".v"), target:+v.replace(/,/g,"")};
+    });
+    const arc = $("#s2arc"), CIRC = 2*Math.PI*R;
+    return {len:8, update(p){
+      const rev = (p/5)%1;                                   // one lap per 5 s tick
+      arc.setAttribute("stroke-dasharray", `${CIRC*.14} ${CIRC}`);
+      arc.setAttribute("stroke-dashoffset", -CIRC*rev);
+      dots.forEach((d,i)=>{
+        const near = Math.abs(((rev - i/ST.length)+1)%1);
+        const hot = near<.09 || near>.94;
+        d.dot.style.background = hot ? "var(--blue)" : "#16243C";
+        d.dot.style.boxShadow  = hot ? "0 0 16px rgba(10,132,255,.95)" : "none";
+        d.dot.style.borderColor= hot ? "var(--blue)" : "var(--line-hot)";
+        d.tx.style.color = hot ? "var(--text)" : "var(--faint)";
+      });
+      $("#s2tick").textContent = 408 + Math.floor(p/5);
+      fr.forEach((f,i)=>{
+        const k = out(win(p,.6+i*.6,1.7+i*.6));
+        f.v.textContent = Math.round(f.target*k).toLocaleString();
+        f.el.style.opacity = .25+.75*k;
+        f.v.style.color = i===3 && k>.9 ? "var(--green)" : "var(--text)";
+      });
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 03 \u2014 the gauntlet \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S3 = (() => {
+    const G = [
+      ["routing","live and simulated legs can never mix"],
+      ["paper route","no live venue on these legs"],
+      ["risk guard","size, exposure, daily loss, kill switch"],
+      ["dedupe","same legs already fired inside 10 minutes"],
+      ["concentration","already holding this event"],
+      ["buying power","cash must cover the whole basket"],
+    ];
+    const els = G.map(([l,e],i)=>{
+      const d = document.createElement("div"); d.className="s3gate";
+      d.innerHTML = `<span class="i">${i+1}</span><span class="l">${l}<em>${e}</em></span><span class="st">idle</span>`;
+      $("#s3lane").appendChild(d);
+      return d;
+    });
+    // three deterministic runs per loop: two rejections, then one that fires
+    const RUNS = [
+      {t0:.6,  die:3, ev:"NFC East Winner (4-leg futures)", msg:"Same four legs fired 4 minutes ago. Inside the dedupe window \u2014 skipped."},
+      {t0:4.2, die:4, ev:"NL Champion (6-leg futures)",     msg:"Already holding this event. Capital stays locked until it resolves, so re-entering only concentrates the bet."},
+      {t0:7.8, die:-1,ev:"Chiefs @ Bills (2-leg moneyline)",msg:"All six clear. 4.61% net edge, both legs live-routed, $92 of buying power against an $84 basket."},
+    ];
+    const tok = $("#s3tok"), lane = $("#s3lane");
+    const DWELL = .42;
+    return {len:12, update(p){
+      let rej=0, pass=0, verdict="", active=null;
+      els.forEach(e=>{ e.style.borderColor="var(--line)"; e.style.background="var(--panel)";
+                       e.querySelector(".st").textContent="idle"; e.querySelector(".st").style.color="var(--line-hot)"; });
+      for(const r of RUNS){
+        const stops = r.die<0 ? G.length : r.die+1;
+        const end = r.t0 + stops*DWELL;
+        if(p > end+ .05){ r.die<0 ? pass++ : rej++; }
+        if(p >= r.t0 && p < end + 1.5) active = {r, stops, end};
+      }
+      $("#s3rej").textContent = rej; $("#s3pass").textContent = pass;
+
+      if(!active){ fade(tok,0); $("#s3vtx").innerHTML = "<span style='color:var(--faint)'>Waiting on the next candidate\u2026</span>"; return; }
+      const {r, stops, end} = active;
+      const idx = clamp(Math.floor((p-r.t0)/DWELL), 0, stops-1);
+      const sub = ((p-r.t0)/DWELL)%1;
+      const done = p>=end;
+
+      // mark every gate the token has cleared
+      for(let i=0;i<idx;i++){
+        els[i].style.borderColor="rgba(47,211,94,.35)";
+        els[i].querySelector(".st").textContent="pass"; els[i].querySelector(".st").style.color="var(--green)";
+      }
+      const cur = els[idx], curSt = cur.querySelector(".st");
+      const failing = done && r.die>=0;
+      if(failing){
+        cur.style.borderColor="rgba(255,79,66,.55)"; cur.style.background="rgba(255,79,66,.1)";
+        curSt.textContent="reject"; curSt.style.color="var(--red)";
+      } else if(done){
+        els.forEach(e=>{ e.style.borderColor="rgba(47,211,94,.4)"; e.style.background="rgba(47,211,94,.07)";
+                         e.querySelector(".st").textContent="pass"; e.querySelector(".st").style.color="var(--green)"; });
+      } else {
+        cur.style.borderColor="var(--blue)"; cur.style.background="rgba(10,132,255,.09)";
+        curSt.textContent="checking"; curSt.style.color="var(--blue-2)";
+      }
+
+      // token slides down the spine, then bursts or lands
+      const target = els[idx].offsetTop + els[idx].offsetHeight/2 - 8;
+      const prev = idx>0 ? els[idx-1].offsetTop + els[idx-1].offsetHeight/2 - 8 : -34;
+      tok.style.top = px(done ? target : prev + (target-prev)*ease(clamp(sub*1.6,0,1)));
+      const burst = win(p, end, end+.5);
+      fade(tok, done ? 1-burst*(r.die>=0?1:0) : 1);
+      tok.style.transform = `scale(${1 + burst*(r.die>=0?1.9:1.5)})`;
+      tok.style.background = done ? (r.die>=0?"var(--red)":"var(--green)") : "var(--blue-2)";
+      tok.style.boxShadow = `0 0 ${16+burst*26}px ${done?(r.die>=0?"rgba(255,79,66,.9)":"rgba(47,211,94,1)"):"rgba(92,178,255,.9)"}`;
+
+      $("#s3vtx").innerHTML = `<div style="color:var(--dim);margin-bottom:7px">${r.ev}</div>` +
+        (done ? `<span style="color:${r.die>=0?"var(--red)":"var(--green)"}">${r.die>=0?"REJECTED \u00b7 gate "+(r.die+1):"FIRED"}</span> \u2014 ${r.msg}`
+              : `<span style="color:var(--blue-2)">checking gate ${idx+1}\u2026</span>`);
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 04 \u2014 the basket \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S4 = (() => {
+    // the real 2026-08-01 basket: 10 / 10 / 3.93 / 0.07 against 10 requested
+    const LEG = [["Eagles \u00b7 long",.36,10,10],["Cowboys \u00b7 long",.34,10,10],["Commanders \u00b7 long",.15,10,3.93],["Giants \u00b7 long",.13,10,0.07]];
+    const rows = LEG.map(([nm,pr,req,got])=>{
+      const d=document.createElement("div"); d.className="s4row";
+      d.innerHTML=`<span class="nm">${nm}</span><span class="s4track"><span class="s4got"></span><span class="s4surplus"></span></span><span class="q">0 / ${req}</span>`;
+      $("#s4rows").appendChild(d);
+      return {pr,req,got,el:d,got_:d.querySelector(".s4got"),sur:d.querySelector(".s4surplus"),q:d.querySelector(".q")};
+    });
+    const RATIO = Math.min(...LEG.map(l=>l[3]/l[2]));   // 0.007
+    const M = [["cost as filled","cost"],["surplus sold back","back"],["commission","fee"],["guaranteed payoff","pay"],["realised P&L","pnl"]];
+    const mm = M.map(([k,id])=>{
+      const d=document.createElement("div"); d.className="s4m"+(id==="pnl"?" tot":"");
+      d.innerHTML=`<span class="k">${k}</span><span class="v" id="s4-${id}">\u2014</span>`;
+      $("#s4math").appendChild(d); return d.querySelector(".v");
+    });
+    const [cE,bE,fE,pE,nE] = mm;
+    // Cash actually spent on the fills, what selling the surplus recovers (a
+    // couple of cents of spread lost on the way out), and the payoff the
+    // basket really guarantees \u2014 the thinnest leg, not the requested size.
+    const COSTU = LEG.reduce((s,l)=>s+l[1]*l[3],0);
+    const FEEU  = LEG.reduce((s,l)=>s+.06*l[1]*(1-l[1])*l[3],0);
+    const KEEP  = LEG.reduce((s,l)=>s+l[1]*l[2]*RATIO,0);
+    const BACK  = (COSTU-KEEP)*0.985;
+    const PAY   = LEG[3][3];
+    const PNL   = -COSTU + BACK - FEEU + PAY;
+    return {len:13, update(p){
+      const hedge = $("#s4hedge");
+      rows.forEach((r,i)=>{
+        const send = out(win(p,.5+i*.25,1.1+i*.25));
+        const back = out(win(p,2.2+i*.5,3.4+i*.5));
+        const qty  = r.got*back;
+        r.el.style.opacity = .3+.7*send;
+        const full = r.got/r.req*100;
+        const hedged = RATIO*100;                 // the only part that is really hedged
+        const conv = out(win(p,5.6,6.2));         // repaint the naked surplus amber
+        const trim = out(win(p,7.4,8.6));         // then sell it back
+        // Blue is only ever the hedged core; amber takes over above the line,
+        // rather than tinting the blue, so the two never read as one muddy bar.
+        r.got_.style.width = (full - (full-hedged)*conv)*back+"%";
+        r.sur.style.left = hedged+"%";
+        r.sur.style.width = Math.max(0, full-hedged)*conv*(1-trim)*back+"%";
+        r.q.textContent = (back<1 ? qty.toFixed(2)
+                          : trim>.5 ? (r.req*RATIO).toFixed(2)
+                          : r.got.toFixed(2)) + " / " + r.req;
+        r.q.style.color = back>.9 && r.got<r.req*.99 ? "var(--amber)" : "var(--faint)";
+      });
+      const hv = win(p,5.0,5.6);
+      fade(hedge,hv); hedge.style.left = `calc(150px + 18px + (100% - 150px - 120px - 36px) * ${RATIO})`;
+
+      cE.textContent = p>3.6 ? "\u2212"+money(COSTU) : "\u2014";
+      fE.textContent = p>4.2 ? "\u2212"+money(FEEU) : "\u2014";
+      bE.textContent = p>8.4 ? "+"+money(BACK) : "\u2014";
+      bE.style.color = p>8.4 ? "var(--amber)" : "var(--text)";
+      if(p>6.4){ pE.textContent = money(PAY); pE.style.color="var(--amber)"; }
+      else pE.textContent="\u2014";
+      if(p>9.4){ nE.textContent = "\u2212"+money(-PNL); nE.style.color="var(--red)"; }
+      else if(p>7.6){ nE.textContent="recomputing\u2026"; nE.style.color="var(--faint)"; }
+      else nE.textContent="\u2014";
+      const sub = $("#sc4 .sub");
+      sub.innerHTML = p>9.0
+        ? `Only <b style="color:var(--green)">0.7%</b> of the basket was ever hedged. Booked honestly it <b style="color:var(--red)">lost money</b> \u2014 before the fix it reported <b style="color:var(--red)">+$2.71</b> of profit it never made.`
+        : `A basket is only hedged up to its thinnest leg. Everything above that line is a naked bet \u2014 so it gets sold straight back.`;
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 05 \u2014 fees \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S5 = (() => {
+    // Everything here is derived from the leg prices, so the bars and the
+    // numbers can't drift apart: cost = \u03a3 ask, gross = (1\u2212cost)/cost,
+    // fee per leg = 0.06\u00b7p\u00b7(1\u2212p), all expressed as a % of the basket cost.
+    const mk = (label, legs) => {
+      const cost = legs.reduce((s,p)=>s+p,0);
+      return {
+        legs, cost,
+        gross: (1-cost)/cost*100,
+        fees:  legs.map(p => (.06*p*(1-p))/cost*100),
+        label,
+      };
+    };
+    const CASES = [ mk("Four legs", [.36,.34,.15,.13]), mk("Two legs", [.45,.47]) ];
+    const built = CASES.map(c=>{
+      const d=document.createElement("div"); d.className="s5case";
+      d.innerHTML=`<div class="cap"><div class="t">${c.gross.toFixed(2)}% gross edge</div>
+          <div class="d">${c.label} at ${c.legs.map(p=>p.toFixed(2)).join(" / ")}</div></div>
+        <div class="s5bar"><div class="s5gross"></div></div>
+        <div class="s5out">\u2014<small>net edge</small></div>`;
+      $("#s5wrap").appendChild(d);
+      const bar=d.querySelector(".s5bar");
+      const blocks=c.legs.map(()=>{const b=document.createElement("div");b.className="s5feeblk";bar.appendChild(b);return b;});
+      return {c,el:d,g:d.querySelector(".s5gross"),blocks,out:d.querySelector(".s5out")};
+    });
+    const SCALE = 9.0;    // % of edge spanned by the full bar
+    return {len:12, update(p){
+      built.forEach((b,ci)=>{
+        const t0 = ci*4.6;
+        b.el.style.opacity = .18+.82*win(p,t0-.4,t0+.3);
+        const gw = out(win(p,t0+.2,t0+1.1))*(b.c.gross/SCALE)*100;
+        b.g.style.width = gw+"%";
+        // Fee blocks eat the green bar from its right edge, one leg at a time.
+        let acc=0, feeTot=0;
+        b.c.fees.forEach((feePct,i)=>{
+          const w = (feePct/SCALE)*100;
+          const k = out(win(p,t0+1.3+i*.32,t0+1.8+i*.32));
+          b.blocks[i].style.left = Math.max(0, gw-acc-w*k)+"%";
+          b.blocks[i].style.width = w*k+"%";
+          acc += w*k; feeTot += feePct*k;
+        });
+        const net = b.c.gross - feeTot;
+        if(p>t0+1.3){
+          b.out.firstChild.textContent = (net>0?"+":"")+net.toFixed(2)+"%";
+          b.out.style.color = net>0 ? "var(--green)" : "var(--red)";
+        } else { b.out.firstChild.textContent="\u2014"; b.out.style.color="var(--faint)"; }
+        b.out.querySelector("small").textContent =
+          p>t0+2.9 ? (net>0 ? "fires" : "guaranteed loss \u2014 never fired") : "net edge";
+      });
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 06 \u2014 reconciliation \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S6 = (() => {
+    const R = [["Philadelphia Eagles",128.87,59],["Dallas Cowboys",60,60],["New York Giants",50,50],["Kansas City Chiefs",24,24]];
+    const rows = R.map(([m,l,e])=>{
+      const d=document.createElement("div"); d.className="s6r";
+      d.innerHTML=`<span class="mk">${m}</span><span class="n">${l.toFixed(2)}</span><span class="n">${e.toFixed(2)}</span><span class="vd">\u2014</span>`;
+      $("#s6rows").appendChild(d);
+      return {d,l,e,led:d.children[1],vd:d.children[3]};
+    });
+    const scan=$("#s6scan");
+    return {len:11, update(p){
+      const sweep = win(p,.7,3.4);
+      fade(scan, sweep>0 && sweep<1 ? 1 : 0);
+      const H = $("#s6table").offsetHeight;
+      scan.style.top = px(46 + (H-46)*sweep);
+      let bad=0;
+      rows.forEach((r,i)=>{
+        const seen = sweep > (i+.85)/rows.length;
+        const mismatch = Math.abs(r.l-r.e)>1e-6;
+        if(mismatch) bad += Math.abs(r.l-r.e);
+        if(!seen){ r.vd.textContent="\u2014"; r.vd.style.color="var(--line-hot)"; r.d.style.background="transparent"; return; }
+        if(mismatch && p<7.2){
+          r.vd.textContent="drift"; r.vd.style.color="var(--red)"; r.d.style.background="rgba(255,79,66,.09)";
+        } else {
+          r.vd.textContent = mismatch ? "adjusted" : "match";
+          r.vd.style.color = mismatch ? "var(--amber)" : "var(--green)";
+          r.d.style.background = mismatch ? "rgba(255,163,24,.07)" : "transparent";
+          if(mismatch) r.led.textContent = (r.l + (r.e-r.l)*out(win(p,7.2,8.2))).toFixed(2);
+        }
+      });
+      const drift = $("#s6drift");
+      if(p<2.6){ drift.textContent="\u2014"; drift.style.color="var(--faint)"; }
+      else if(p<7.2){ drift.textContent="69.87"; drift.style.color="var(--red)"; }
+      else { drift.textContent="0.00"; drift.style.color="var(--green)"; }
+      $("#s6dtx").textContent = p<2.6 ? "Comparing every live fill against the positions the exchange actually holds."
+        : p<7.2 ? "The ledger claims 128.87 Eagles contracts. The exchange holds 59 \u2014 unwind sells that were executed but never recorded."
+        : "Ledger and exchange agree. P&L can be trusted again.";
+      $("#s6fix").innerHTML = p<7.2
+        ? "A mismatch writes one append-only adjustment entry \u2014 quantities only, never P&amp;L."
+        : `<span style="color:var(--amber)">Adjustment written.</span> Zero-price fills bring the recorded position to 59.00. No history rewritten, one row to undo it.`;
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 director \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const SCENES = [
+    {id:"sc1", name:"the edge",   s:S1},
+    {id:"sc2", name:"scan loop",  s:S2},
+    {id:"sc3", name:"the gates",  s:S3},
+    {id:"sc4", name:"the basket", s:S4},
+    {id:"sc5", name:"fees",       s:S5},
+    {id:"sc6", name:"reconcile",  s:S6},
+  ];
+  const rail = $("#rail");
+  SCENES.forEach((sc,i)=>{
+    const c=document.createElement("div"); c.className="chip";
+    c.innerHTML=`<span class="bar"></span><span class="tx">${String(i+1).padStart(2,"0")} ${sc.name}</span>`;
+    c.onclick=()=>go(i);
+    rail.appendChild(c); sc.chip=c; sc.bar=c.querySelector(".bar");
+  });
+
+  let cur=0, phase=0, last=performance.now(), paused=false, loops=0;
+  const LOOPS_BEFORE_ADVANCE = 2;
+
+  function go(i){
+    SCENES[cur].chip.classList.remove("act");
+    document.getElementById(SCENES[cur].id).classList.remove("on");
+    cur=(i+SCENES.length)%SCENES.length; phase=0; loops=0;
+    document.getElementById(SCENES[cur].id).classList.add("on");
+    SCENES[cur].chip.classList.add("act");
+    SCENES[cur].s.update(0);
+  }
+
+  function frame(now){
+    const dt=(now-last)/1000; last=now;
+    if(!paused){
+      phase+=dt;
+      const sc=SCENES[cur];
+      if(phase>=sc.s.len){ phase-=sc.s.len; if(++loops>=LOOPS_BEFORE_ADVANCE){ go(cur+1); requestAnimationFrame(frame); return; } }
+      sc.s.update(phase);
+      SCENES.forEach((s,i)=> s.bar.style.width = i===cur ? (phase/s.s.len*100)+"%" : "0%");
+    }
+    requestAnimationFrame(frame);
+  }
+
+  addEventListener("keydown", e=>{
+    if(e.key>="1"&&e.key<="6") go(+e.key-1);
+    else if(e.key==="ArrowRight") go(cur+1);
+    else if(e.key==="ArrowLeft") go(cur-1);
+    else if(e.key===" "){ e.preventDefault(); paused=!paused; }
+    else if(e.key.toLowerCase()==="h") document.body.classList.toggle("bare");
+  });
+
+  // Freeze any scene at any moment \u2014 handy for grabbing a still frame.
+  window.__broll = { go, hold(i,p){ go(i); phase=p; SCENES[i].s.update(p); paused=true; } };
+
+  go(0);
+  if(reduced){ SCENES.forEach(s=>s.s.update(s.s.len*.85)); }
+  else requestAnimationFrame(frame);
+})();
+</script>

@@ -1,0 +1,628 @@
+<title>Arb Bot &#8212; Reel B-Roll</title>
+<style>
+  :root{
+    --ink:#050912; --panel:#0B1322; --panel-2:#0F1A2D;
+    --line:#1A2740; --line-hot:#27395E;
+    --text:#E9EFFA; --dim:#8195B3; --faint:#56688A;
+    --blue:#0A84FF; --blue-2:#5CB2FF;
+    --green:#2FD35E; --amber:#FFA318; --red:#FF4F42;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+  }
+  html,body{height:100%;}
+  body{
+    background:radial-gradient(130% 100% at 50% -25%,#0D1A31 0%,transparent 62%),var(--ink);
+    color:var(--text);font-family:var(--sans);overflow:hidden;display:grid;place-items:center;
+  }
+  #fit{position:fixed;inset:0;display:grid;place-items:center;}
+  #stage{width:1440px;height:810px;transform-origin:center;position:relative;}
+
+  .scene{position:absolute;inset:0;padding:54px 88px 96px;display:none;flex-direction:column;justify-content:center;}
+  .scene.on{display:flex;}
+
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--faint);}
+  .eyebrow b{color:var(--blue);font-weight:400;margin-right:12px;}
+  h2{font-size:36px;font-weight:600;letter-spacing:-.028em;line-height:1.08;margin-top:12px;max-width:22ch;text-wrap:balance;}
+  h2 em{font-style:normal;color:var(--faint);}
+  .sub{margin-top:11px;font-size:14.5px;line-height:1.55;color:var(--dim);max-width:56ch;}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+
+  /* ---------- 01 hook ---------- */
+  #sc1{justify-content:center;align-items:flex-start;}
+  .hooklab{font-family:var(--mono);font-size:11px;letter-spacing:.3em;text-transform:uppercase;color:var(--blue);}
+  .hookline{font-size:62px;font-weight:640;letter-spacing:-.035em;line-height:1.06;max-width:20ch;margin-top:24px;}
+  .hookline .g{color:var(--faint);}
+  .caret{display:inline-block;width:4px;height:.82em;background:var(--blue);vertical-align:-.07em;margin-left:6px;}
+
+  /* ---------- trees (02, 08) ---------- */
+  .treewrap{position:relative;margin-top:26px;}
+  .treewrap svg{position:absolute;inset:0;overflow:visible;pointer-events:none;}
+  .tnode{
+    position:absolute;transform:translateY(-50%);
+    border:1px solid var(--line);border-radius:8px;background:var(--panel);
+    padding:7px 12px;opacity:0;
+  }
+  .tnode .tt{font-family:var(--mono);font-size:11.5px;letter-spacing:-.01em;white-space:nowrap;}
+  .tnode .ts{font-size:10.5px;color:var(--faint);margin-top:2px;white-space:nowrap;}
+  .tnode.root{background:linear-gradient(180deg,#132444,#0D1729);border-color:var(--line-hot);}
+  .tnode.root .tt{font-size:13.5px;}
+  .tnode.hot{border-color:var(--blue);box-shadow:0 0 0 1px rgba(10,132,255,.25),0 0 26px -8px rgba(10,132,255,.7);}
+  .tnode.good{border-color:rgba(47,211,94,.5);background:rgba(47,211,94,.08);}
+  .tnode.bad{border-color:rgba(255,79,66,.45);background:rgba(255,79,66,.08);}
+  .tnode.bad .tt{color:#FF8E85;}
+  .tedge{fill:none;stroke:var(--line);stroke-width:1.3;}
+  .tedge.lit{stroke:var(--blue);stroke-width:1.8;}
+  .tedge.dead{stroke:#3A1D1C;}
+
+  /* ---------- 03 triangular ---------- */
+  .triwrap{margin-top:24px;display:grid;grid-template-columns:1fr 400px;gap:56px;align-items:center;}
+  .tri{position:relative;width:560px;height:396px;justify-self:center;}
+  .tri svg{position:absolute;inset:0;overflow:visible;}
+  .vert{position:absolute;transform:translate(-50%,-50%);text-align:center;}
+  .vert .c{width:64px;height:64px;border-radius:50%;border:1px solid var(--line-hot);background:var(--panel);
+           display:grid;place-items:center;font-family:var(--mono);font-size:13px;margin:0 auto;transition:none;}
+  .vert .l{font-family:var(--mono);font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);margin-top:8px;}
+  .legrate{position:absolute;transform:translate(-50%,-50%);font-family:var(--mono);font-size:11.5px;
+           background:var(--ink);padding:3px 8px;border-radius:4px;color:var(--dim);opacity:0;}
+  .verdict{display:flex;flex-direction:column;gap:13px;}
+  .vrow{display:flex;justify-content:space-between;align-items:baseline;padding-bottom:12px;border-bottom:1px solid var(--line);
+        font-family:var(--mono);font-size:15px;}
+  .vrow .k{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:var(--faint);}
+  .vrow.big{border-bottom:0;} .vrow.big .v{font-size:30px;letter-spacing:-.03em;}
+
+  /* ---------- 04 prediction pair ---------- */
+  .pairwrap{margin-top:30px;display:grid;grid-template-columns:1fr 1fr 320px;gap:44px;align-items:center;}
+  .venue{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:20px 22px;opacity:0;}
+  .venue .vn{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--blue-2);}
+  .venue .qq{font-size:15px;line-height:1.45;margin-top:11px;color:var(--dim);min-height:44px;}
+  .venue .side{display:flex;justify-content:space-between;align-items:baseline;margin-top:16px;padding-top:15px;border-top:1px solid var(--line);}
+  .venue .side .s{font-family:var(--mono);font-size:12px;letter-spacing:.16em;color:var(--faint);}
+  .venue .side .p{font-family:var(--mono);font-size:32px;letter-spacing:-.03em;}
+  .lock{border:1px solid var(--line);border-radius:12px;padding:20px 22px;background:var(--panel);opacity:0;}
+  .lock .lk{font-family:var(--mono);font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);}
+  .lock .lv{font-family:var(--mono);font-size:40px;letter-spacing:-.035em;line-height:1.1;margin-top:6px;}
+  .lock .ln{font-size:12.5px;color:var(--dim);line-height:1.5;margin-top:9px;}
+
+  /* ---------- 05 risk ---------- */
+  .riskwrap{margin-top:30px;display:grid;grid-template-columns:1fr 360px;gap:60px;align-items:center;}
+  .caps{display:flex;flex-direction:column;gap:17px;}
+  .cap{display:grid;grid-template-columns:210px 1fr 110px;align-items:center;gap:20px;opacity:0;}
+  .cap .cn{font-size:13.5px;color:var(--dim);text-align:right;}
+  .captrack{height:12px;border-radius:6px;background:#0A1120;border:1px solid var(--line);position:relative;overflow:hidden;}
+  .capfill{position:absolute;inset:0 auto 0 0;width:0;background:linear-gradient(90deg,#124A85,#1F76D6);}
+  .cap .cv{font-family:var(--mono);font-size:15px;text-align:right;}
+  .kill{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:26px;text-align:center;}
+  .kill .kl{font-family:var(--mono);font-size:10px;letter-spacing:.24em;text-transform:uppercase;color:var(--faint);}
+  .switch{width:132px;height:66px;border-radius:33px;background:#101A2E;border:1px solid var(--line-hot);
+          margin:20px auto 0;position:relative;transition:background .25s,border-color .25s,box-shadow .25s;}
+  .knob{position:absolute;top:5px;left:5px;width:54px;height:54px;border-radius:50%;background:#33465F;transition:left .3s cubic-bezier(.5,0,.2,1),background .3s;}
+  .switch.on{background:rgba(255,79,66,.22);border-color:var(--red);box-shadow:0 0 34px -6px rgba(255,79,66,.75);}
+  .switch.on .knob{left:73px;background:var(--red);}
+  .kill .ks{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;margin-top:16px;color:var(--faint);}
+  .stamp{margin-top:26px;font-family:var(--mono);font-size:15px;letter-spacing:.2em;text-transform:uppercase;
+         color:var(--red);border:1px solid var(--red);border-radius:7px;padding:11px 0;opacity:0;}
+
+  /* ---------- 06 the honest beat ---------- */
+  .quiet{margin-top:26px;display:grid;grid-template-columns:1fr 330px;gap:56px;align-items:start;}
+  .qlist{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--panel);}
+  .qhead,.qr{display:grid;grid-template-columns:1fr 110px 110px 128px;padding:12px 20px;align-items:center;}
+  .qhead{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);
+         background:#0A1120;border-bottom:1px solid var(--line);}
+  .qr{border-bottom:1px solid rgba(26,39,64,.55);font-family:var(--mono);font-size:13px;opacity:0;}
+  .qr:last-child{border-bottom:0;}
+  .qr .nm{font-family:var(--sans);font-size:13px;color:var(--dim);}
+  .qr .n{text-align:right;padding-right:24px;font-variant-numeric:tabular-nums;}
+  .qr .vd{text-align:right;font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);}
+  .zero{text-align:right;}
+  .zero .z{font-family:var(--mono);font-size:104px;letter-spacing:-.05em;line-height:.9;color:var(--line-hot);}
+  .zero .zl{font-family:var(--mono);font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);margin-top:12px;}
+  .zero .zn{font-size:13px;color:var(--dim);line-height:1.55;margin-top:16px;}
+
+  /* ---------- 07 paper mode ---------- */
+  .paper{margin-top:34px;position:relative;height:300px;}
+  .paper svg{position:absolute;inset:0;overflow:visible;}
+  .pbox{position:absolute;transform:translateY(-50%);border:1px solid var(--line);border-radius:11px;
+        background:var(--panel);padding:16px 18px;width:250px;opacity:0;}
+  .pbox .pt{font-family:var(--mono);font-size:12.5px;}
+  .pbox .ps{font-size:11.5px;color:var(--faint);margin-top:5px;line-height:1.45;}
+  .pbox.live{border-color:rgba(47,211,94,.4);}
+  .pbox.sim{border-color:rgba(255,163,24,.4);}
+  .tape{font-family:var(--mono);font-size:11px;color:var(--green);margin-top:9px;line-height:1.6;height:54px;overflow:hidden;}
+  .seal{position:absolute;left:50%;bottom:4px;transform:translateX(-50%);text-align:center;opacity:0;}
+  .seal .s1{font-family:var(--mono);font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--green);
+            border:1px solid rgba(47,211,94,.5);border-radius:8px;padding:14px 20px;}
+
+  /* ---------- chrome ---------- */
+  #rail{position:absolute;left:88px;right:88px;bottom:28px;display:flex;gap:7px;transition:opacity .3s;}
+  .chip{flex:1;position:relative;height:28px;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:#080E1A;cursor:pointer;}
+  .chip .bar{position:absolute;inset:0 auto 0 0;width:0;background:rgba(10,132,255,.16);}
+  .chip .tx{position:absolute;inset:0;display:flex;align-items:center;padding:0 9px;
+            font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);}
+  .chip.act{border-color:var(--line-hot);} .chip.act .tx{color:var(--text);}
+  #hint{position:absolute;right:88px;top:30px;font-family:var(--mono);font-size:10px;letter-spacing:.16em;
+        text-transform:uppercase;color:var(--line-hot);transition:opacity .3s;}
+  body.bare #rail,body.bare #hint{opacity:0;pointer-events:none;}
+</style>
+
+<div id="fit"><div id="stage">
+  <div id="hint">1-8 scene &#183; arrows step &#183; space pause &#183; h hide</div>
+
+  <section class="scene" id="sc1">
+    <div class="hooklab" id="hooklab">Hook A</div>
+    <div class="hookline" id="hookline"></div>
+  </section>
+
+  <section class="scene" id="sc2">
+    <div class="eyebrow"><b>02</b>What the bot is made of</div>
+    <h2>One engine. Two strategies. <em>Four hard limits.</em></h2>
+    <div class="treewrap" id="tree1" style="height:524px"><svg></svg></div>
+  </section>
+
+  <section class="scene" id="sc3">
+    <div class="eyebrow"><b>03</b>Strategy one &#183; triangular</div>
+    <h2>Dollars to Bitcoin to Ethereum <em>and back to dollars.</em></h2>
+    <div class="triwrap">
+      <div class="tri" id="tri"><svg viewBox="0 0 560 396"></svg></div>
+      <div class="verdict" id="triv"></div>
+    </div>
+  </section>
+
+  <section class="scene" id="sc4">
+    <div class="eyebrow"><b>04</b>Strategy two &#183; prediction pair</div>
+    <h2>Same event, two venues. <em>Buy both sides.</em></h2>
+    <div class="pairwrap">
+      <div class="venue" id="v1">
+        <div class="vn">Polymarket</div>
+        <div class="qq">Will the Fed cut rates in September?</div>
+        <div class="side"><span class="s">BUY YES</span><span class="p">$0.54</span></div>
+      </div>
+      <div class="venue" id="v2">
+        <div class="vn">Kalshi</div>
+        <div class="qq">Fed decision &#183; September &#183; cut</div>
+        <div class="side"><span class="s">BUY NO</span><span class="p">$0.43</span></div>
+      </div>
+      <div class="lock" id="lock">
+        <div class="lk">Combined cost</div>
+        <div class="lv" id="lockv">$0.97</div>
+        <div class="ln" id="lockn"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" id="sc5">
+    <div class="eyebrow"><b>05</b>Risk</div>
+    <h2>Every limit is in the code. <em>Not in a promise.</em></h2>
+    <div class="riskwrap">
+      <div class="caps" id="caps"></div>
+      <div>
+        <div class="kill">
+          <div class="kl">Daily loss kill switch</div>
+          <div class="switch" id="sw"><div class="knob"></div></div>
+          <div class="ks" id="swl">armed &#183; trips at 5%</div>
+        </div>
+        <div class="stamp" id="stamp">Hard caps. Not suggestions.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" id="sc6">
+    <div class="eyebrow"><b>06</b>The part nobody else shows you</div>
+    <h2>Most days it finds <em>nothing at all.</em></h2>
+    <div class="quiet">
+      <div class="qlist">
+        <div class="qhead"><span>Candidate</span><span class="n" style="text-align:right;padding-right:24px">Edge</span><span class="n" style="text-align:right;padding-right:24px">Fees</span><span style="text-align:right">Verdict</span></div>
+        <div id="qrows"></div>
+      </div>
+      <div class="zero">
+        <div class="z" id="zcount">0</div>
+        <div class="zl">qualifying today</div>
+        <div class="zn" id="znote"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scene" id="sc7">
+    <div class="eyebrow"><b>07</b>Paper mode</div>
+    <h2>Real prices in. <em>Simulated fills out.</em></h2>
+    <div class="paper" id="paper"><svg></svg></div>
+  </section>
+
+  <section class="scene" id="sc8">
+    <div class="eyebrow"><b>08</b>What happens to one opportunity</div>
+    <h2>Nearly every branch <em>ends in no trade.</em></h2>
+    <div class="treewrap" id="tree2" style="height:296px"><svg></svg></div>
+  </section>
+
+  <div id="rail"></div>
+</div></div>
+
+<script>
+(() => {
+  const $  = s => document.querySelector(s);
+  const stage = $("#stage");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const fit = () => stage.style.transform = `scale(${Math.min(innerWidth/1440, innerHeight/810)})`;
+  addEventListener("resize", fit); fit();
+
+  const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+  const win=(p,a,b)=>clamp((p-a)/(b-a),0,1);
+  const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+  const out =t=>1-Math.pow(1-t,3);
+  const SVGNS="http://www.w3.org/2000/svg";
+  const mk=(t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 shared tree renderer \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  function buildTree(host, root, opt){
+    const {colW, rowH, top=0, nodeW=200} = opt;
+    let leaf=0;
+    (function walk(n,d){
+      n.d=d;
+      if(!n.c || !n.c.length){ n.y = leaf++; return; }
+      n.c.forEach(k=>walk(k,d+1));
+      n.y = (n.c[0].y + n.c[n.c.length-1].y)/2;
+    })(root,0);
+
+    const svg = host.querySelector("svg");
+    svg.innerHTML=""; [...host.querySelectorAll(".tnode")].forEach(e=>e.remove());
+    const all=[], edges=[];
+    (function place(n){
+      n.px = n.d*colW; n.py = top + n.y*rowH;
+      const el = mk("div","tnode"+(n.d===0?" root":"")+(n.cls?" "+n.cls:""),
+                    `<div class="tt">${n.t}</div>`+(n.s?`<div class="ts">${n.s}</div>`:""));
+      el.style.left = n.px+"px"; el.style.top = n.py+"px";
+      if(n.d===0) el.style.width = "auto";
+      host.appendChild(el); n.el=el; all.push(n);
+      for(const k of (n.c||[])){
+        const p = document.createElementNS(SVGNS,"path");
+        // s-curve out of the parent's right edge into the child's left edge
+        const x1=n.px+nodeW, y1=n.py, x2=k.px, y2=top+k.y*rowH, mx=(x1+x2)/2;
+        p.setAttribute("d",`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`);
+        p.setAttribute("class","tedge"+(k.ecls?" "+k.ecls:""));
+        svg.appendChild(p);
+        k.edge=p; k.len=p.getTotalLength();
+        p.style.strokeDasharray=k.len; p.style.strokeDashoffset=k.len;
+        edges.push(k);
+        place(k);
+      }
+    })(root);
+    // measure real widths so edges leave the true right edge of each box
+    for(const n of all){
+      if(!n.c) continue;
+      const w=n.el.offsetWidth;
+      for(const k of n.c){
+        const x1=n.px+w, y1=n.py, x2=k.px, y2=k.py, mx=(x1+x2)/2;
+        k.edge.setAttribute("d",`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`);
+        k.len=k.edge.getTotalLength();
+        k.edge.style.strokeDasharray=k.len; k.edge.style.strokeDashoffset=k.len;
+      }
+    }
+    return {all, root};
+  }
+  /* Branches draw outward one depth at a time, each node landing behind its own branch. */
+  function growTree(t, p, t0=.4, step=.62){
+    for(const n of t.all){
+      const a = t0 + n.d*step;
+      const k = out(win(p, a, a+.55));
+      n.el.style.opacity = k;
+      n.el.style.transform = `translateY(-50%) translateX(${(1-k)*-14}px)`;
+      if(n.edge){
+        const e = out(win(p, a-step*.55, a+.2));
+        n.edge.style.strokeDashoffset = n.len*(1-e);
+      }
+    }
+  }
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 01 \u00b7 hook \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S1 = (() => {
+    const H = [
+      ["Hook A", "Every arbitrage bot video on Instagram is lying to you.", "I built a real one."],
+      ["Hook B", "I built a bot that finds free money across three venues.", "Most days it finds nothing. That's the honest version."],
+      ["Hook C", "Arbitrage is real.", "The version being sold to you on Instagram is not."],
+    ];
+    const lab=$("#hooklab"), line=$("#hookline");
+    return {len:13.5, update(p){
+      const i = Math.min(H.length-1, Math.floor(p/4.5));
+      const local = p - i*4.5;
+      const [l,a,b] = H[i];
+      lab.textContent = l;
+      const full = a+"  "+b;                       // NUL marks the grey break
+      const n = Math.round(full.length * out(win(local,.35,2.1)));
+      const cut = full.slice(0,n);
+      const brk = cut.indexOf(" ");
+      const head = brk<0 ? cut : cut.slice(0,brk);
+      const tail = brk<0 ? ""  : cut.slice(brk+1);
+      line.innerHTML = head + (tail?`<span class="g">${tail}</span>`:"") +
+                       (local<2.3 || Math.floor(local*2)%2 ? '<span class="caret"></span>' : "");
+      lab.style.opacity = out(win(local,.05,.4));
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 02 \u00b7 system tree \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S2 = (() => {
+    const T = {t:"arb engine", s:"scan &#8594; risk &#8594; execute", c:[
+      {t:"scanners", s:"every 5 seconds", c:[
+        {t:"triangular &#183; BitGet", s:"one venue, no transfer risk", c:[
+          {t:"USDT &#8594; BTC"},{t:"BTC &#8594; ETH"},{t:"ETH &#8594; USDT"},
+        ]},
+        {t:"prediction pair", s:"same event, two books", c:[
+          {t:"Polymarket &#183; YES"},{t:"Kalshi &#183; NO"},
+        ]},
+      ]},
+      {t:"risk guard", s:"checked before every order", c:[
+        {t:"max trade size", s:"$100"},
+        {t:"max daily exposure", s:"$500"},
+        {t:"trailing stop", s:"5%"},
+        {t:"daily loss kill switch", s:"5%"},
+      ]},
+      {t:"execution", s:"how a fill happens", c:[
+        {t:"paper fills", s:"priced off the live tape"},
+        {t:"live orders", s:"signed, gated, off by default"},
+      ]},
+    ]};
+    let t=null;
+    return {len:13, mount(){ t = buildTree($("#tree1"), T, {colW:296, rowH:46, top:12, nodeW:196}); },
+            update(p){ if(!t) this.mount(); growTree(t,p,.4,.62); }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 03 \u00b7 triangular \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S3 = (() => {
+    const host=$("#tri"), svg=host.querySelector("svg");
+    const V=[["USDT",280,52],["BTC",492,330],["ETH",68,330]];
+    const legs=[["1 USDT = 0.0000094 BTC",386,191],["1 BTC = 26.41 ETH",280,352],["1 ETH = 4,040.60 USDT",174,191]];
+    svg.innerHTML="";
+    const tri=document.createElementNS(SVGNS,"path");
+    tri.setAttribute("d",`M ${V[0][1]} ${V[0][2]} L ${V[1][1]} ${V[1][2]} L ${V[2][1]} ${V[2][2]} Z`);
+    tri.setAttribute("fill","none"); tri.setAttribute("stroke","#1A2740"); tri.setAttribute("stroke-width","1.3");
+    svg.appendChild(tri);
+    const glow=document.createElementNS(SVGNS,"path");
+    glow.setAttribute("d",tri.getAttribute("d")); glow.setAttribute("fill","none");
+    glow.setAttribute("stroke","#0A84FF"); glow.setAttribute("stroke-width","2");
+    glow.setAttribute("stroke-linecap","round"); svg.appendChild(glow);
+    const TLEN = glow.getTotalLength();
+    glow.style.strokeDasharray = `${TLEN*.16} ${TLEN}`;
+    const dot=document.createElementNS(SVGNS,"circle");
+    dot.setAttribute("r","6"); dot.setAttribute("fill","#5CB2FF");
+    dot.setAttribute("filter","drop-shadow(0 0 10px rgba(92,178,255,.95))"); svg.appendChild(dot);
+    const verts = V.map(([n,x,y])=>{
+      const d=mk("div","vert",`<div class="c">${n}</div><div class="l">${n==="USDT"?"start / finish":"leg"}</div>`);
+      d.style.left=x/560*100+"%"; d.style.top=y/396*100+"%"; host.appendChild(d);
+      return d.querySelector(".c");
+    });
+    const rates = legs.map(([tx,x,y])=>{
+      const d=mk("div","legrate",tx); d.style.left=x/560*100+"%"; d.style.top=y/396*100+"%";
+      host.appendChild(d); return d;
+    });
+    const ROWS=[["implied cross","imp"],["direct rate","dir"],["gross spread","gr"],["round-trip fees","fee"],["net edge","net"]];
+    const cells=ROWS.map(([k,id],i)=>{
+      const d=mk("div","vrow"+(id==="net"?" big":""),`<span class="k">${k}</span><span class="v">&#8212;</span>`);
+      $("#triv").appendChild(d); return d.querySelector(".v");
+    });
+    return {len:11, update(p){
+      const lap=(p/3.4)%1;
+      glow.style.strokeDashoffset = -TLEN*lap;
+      const pt=glow.getPointAtLength(TLEN*lap);
+      dot.setAttribute("cx",pt.x); dot.setAttribute("cy",pt.y);
+      verts.forEach((c,i)=>{
+        const near=Math.abs(((lap-i/3)+1)%1);
+        const hot=near<.1||near>.93;
+        c.style.borderColor = hot?"var(--blue)":"var(--line-hot)";
+        c.style.boxShadow = hot?"0 0 22px -4px rgba(10,132,255,.9)":"none";
+        c.style.color = hot?"var(--text)":"var(--dim)";
+      });
+      rates.forEach((r,i)=>r.style.opacity = out(win(p,1.0+i*.5,1.7+i*.5)));
+      const V2=["1.00311","1.00000","+0.311%","-0.300%","+0.011%"];
+      cells.forEach((c,i)=>{
+        const k=win(p,2.9+i*.55,3.3+i*.55);
+        c.textContent = k>.6 ? V2[i] : "\u2014";
+        if(i===3 && k>.6) c.style.color="var(--red)";
+        if(i===4 && k>.6) c.style.color="var(--amber)";
+      });
+      const sub = $("#sc3 .sub") || (()=>{const d=mk("div","sub");$("#sc3 h2").after(d);return d;})();
+      sub.innerHTML = p>6.4
+        ? `Eleven thousandths of a percent. <b style="color:var(--amber)">Below the threshold &#8212; no trade.</b> This is the normal result.`
+        : `The bot compares the rate implied by going the long way round against the direct rate, and only fires when the gap is bigger than every fee on the path.`;
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 04 \u00b7 prediction pair \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S4 = (() => {
+    const v1=$("#v1"),v2=$("#v2"),lock=$("#lock"),lv=$("#lockv"),ln=$("#lockn"),lk=lock.querySelector(".lk");
+    return {len:11, update(p){
+      v1.style.opacity=out(win(p,.4,1.1));
+      v2.style.opacity=out(win(p,1.1,1.8));
+      lock.style.opacity=out(win(p,2.2,2.9));
+      const sum = .97;
+      if(p<3.4){ lk.textContent="Combined cost"; lv.textContent="$0.97"; lv.style.color="var(--text)"; ln.innerHTML=""; }
+      else if(p<5.6){
+        lk.textContent="Combined cost"; lv.textContent="$0.97"; lv.style.color="var(--green)";
+        ln.innerHTML=`Whichever way it resolves, one side pays <b class="mono">$1.00</b>. That is <b class="mono" style="color:var(--green)">3&#162;</b> of spread, locked at entry.`;
+      } else {
+        lk.textContent="Net edge"; lv.textContent="+1.5\u00a2"; lv.style.color="var(--green)";
+        ln.innerHTML=`3&#162; of spread, less about <b class="mono">1.5&#162;</b> in fees and gas. <b style="color:var(--green)">Net 1.5&#162; per dollar</b> &#8212; if both legs fill.`;
+      }
+      const sub=$("#sc4 .sub")||(()=>{const d=mk("div","sub");$("#sc4 h2").after(d);return d;})();
+      sub.innerHTML = `Buy YES on one venue and NO on the other. Exactly one of them pays out a dollar, so if the two together cost less than a dollar, the difference is yours at settlement.`;
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 05 \u00b7 risk \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S5 = (() => {
+    const C=[["Max trade size","$100",.20],["Max daily exposure","$500",1],["Trailing stop","5%",.35],["Max daily loss","5%",.35]];
+    const rows=C.map(([n,v])=>{
+      const d=mk("div","cap",`<span class="cn">${n}</span><span class="captrack"><span class="capfill"></span></span><span class="cv">${v}</span>`);
+      $("#caps").appendChild(d);
+      return {d,f:d.querySelector(".capfill")};
+    });
+    const sw=$("#sw"),swl=$("#swl"),stamp=$("#stamp");
+    return {len:11.5, update(p){
+      rows.forEach((r,i)=>{
+        const k=out(win(p,.4+i*.42,1.3+i*.42));
+        r.d.style.opacity=k; r.f.style.width=(C[i][2]*100*k)+"%";
+      });
+      const on = p>4.4 && p<8.6;
+      sw.classList.toggle("on",on);
+      swl.textContent = on ? "tripped \u00b7 all trading halted" : "armed \u00b7 trips at 5%";
+      swl.style.color = on ? "var(--red)" : "var(--faint)";
+      stamp.style.opacity = out(win(p,5.4,6.1));
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 06 \u00b7 the honest beat \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S6 = (() => {
+    // Verdict per row, because "fees exceed edge" is only true where it is:
+    // the first one clears fees and still dies on the minimum-spread floor.
+    const R=[
+      ["USDT / BTC / ETH loop","0.31%","0.30%","net 0.01% \u00b7 below min"],
+      ["Fed cuts in September","0.42%","0.50%","fees exceed edge"],
+      ["USDT / SOL / ETH loop","0.18%","0.30%","fees exceed edge"],
+      ["Super Bowl winner","0.61%","0.90%","fees exceed edge"],
+      ["USDT / XRP / BTC loop","0.09%","0.30%","fees exceed edge"],
+    ];
+    const rows=R.map(([n,e,f,v])=>{
+      const d=mk("div","qr",`<span class="nm">${n}</span><span class="n">${e}</span><span class="n">${f}</span><span class="vd">&#8212;</span>`);
+      $("#qrows").appendChild(d); return {d,vd:d.children[3],edge:d.children[1]};
+    });
+    return {len:12.5, update(p){
+      rows.forEach((r,i)=>{
+        const a=.5+i*.7;
+        r.d.style.opacity=out(win(p,a,a+.5));
+        const judged = p>a+1.0;
+        r.vd.textContent = judged ? R[i][3] : "\u2014";
+        r.vd.style.color = judged ? "var(--red)" : "var(--faint)";
+        r.edge.style.color = judged ? "var(--faint)" : "var(--text)";
+        r.d.style.background = judged ? "rgba(255,79,66,.05)" : "transparent";
+      });
+      $("#zcount").style.color = p>5.4 ? "var(--text)" : "var(--line-hot)";
+      $("#znote").innerHTML = p<5.4 ? ""
+        : p<8.4 ? `Every candidate today was real. Every one of them cost more in fees than it paid in spread.`
+        : `That is not a bug. That is what arbitrage looks like when you are not a market maker with a server in the same building as the exchange.`;
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 07 \u00b7 paper mode \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S7 = (() => {
+    const host=$("#paper"), svg=host.querySelector("svg");
+    const B=[
+      ["live",  "Live market tape",  "Real books, real depth, polled every 5 seconds.", 0,   112],
+      ["",      "Engine",            "Same scanners, same risk checks, same code path.", 430, 112],
+      ["sim",   "Simulated fill",    "Priced against the tape, with fees and slippage.", 860, 112],
+    ];
+    const boxes=B.map(([cls,t,s,x,y])=>{
+      const d=mk("div","pbox"+(cls?" "+cls:""),`<div class="pt">${t}</div><div class="ps">${s}</div>`+(cls==="live"?'<div class="tape"></div>':""));
+      d.style.left=x+"px"; d.style.top=y+"px"; host.appendChild(d); return d;
+    });
+    svg.innerHTML="";
+    const wires=[[250,112,430,112],[680,112,860,112]].map(([x1,y1,x2,y2])=>{
+      const p=document.createElementNS(SVGNS,"path");
+      p.setAttribute("d",`M ${x1} ${y1} L ${x2} ${y2}`);
+      p.setAttribute("stroke","#1A2740"); p.setAttribute("stroke-width","1.3"); p.setAttribute("fill","none");
+      svg.appendChild(p); return p;
+    });
+    const flow=wires.map(()=>{
+      const c=document.createElementNS(SVGNS,"circle"); c.setAttribute("r","3.5"); c.setAttribute("fill","#5CB2FF");
+      c.setAttribute("filter","drop-shadow(0 0 7px rgba(92,178,255,.9))"); svg.appendChild(c); return c;
+    });
+    const seal=mk("div","seal",'<div class="s1">No capital at risk</div>');
+    host.appendChild(seal);
+    const TICKS=["BTC 96,412.20","ETH 3,648.91","BTC 96,409.75","SOL 214.06","ETH 3,649.40","BTC 96,415.10"];
+    return {len:10, update(p){
+      boxes.forEach((b,i)=>b.style.opacity=out(win(p,.4+i*.55,1.1+i*.55)));
+      wires.forEach((w,i)=>w.style.opacity=out(win(p,.8+i*.55,1.4+i*.55)));
+      flow.forEach((c,i)=>{
+        const k=((p*.55)+i*.4)%1, x1=i?680:250, x2=i?860:430;
+        c.setAttribute("cx",x1+(x2-x1)*k); c.setAttribute("cy",112);
+        c.style.opacity = p>1.2+i*.55 ? 1 : 0;
+      });
+      const tape=host.querySelector(".tape");
+      if(tape){ const n=Math.floor(p*3)%TICKS.length;
+        tape.innerHTML=[0,1,2].map(k=>TICKS[(n+k)%TICKS.length]).join("<br>"); }
+      seal.style.opacity=out(win(p,4.6,5.4));
+      const sub=$("#sc7 .sub")||(()=>{const d=mk("div","sub");$("#sc7 h2").after(d);return d;})();
+      sub.innerHTML = p>6.2
+        ? `You watch it run for a week before a single penny is exposed. <b style="color:var(--green)">That is the difference between a system and a screenshot.</b>`
+        : `Nothing here is a backtest. The scanners read live venues; only the fill is simulated, priced against the tape it just read.`;
+    }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 08 \u00b7 outcome tree \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const S8 = (() => {
+    const T = {t:"1 opportunity", s:"found by a scanner", c:[
+      {t:"spread below minimum", s:"most of them", cls:"bad", c:[{t:"no trade", cls:"bad"}]},
+      {t:"clears the spread", c:[
+        {t:"fails a risk cap", s:"size or exposure", cls:"bad", c:[{t:"no trade", cls:"bad"}]},
+        {t:"passes risk", c:[
+          {t:"already fired recently", cls:"bad", c:[{t:"no trade", cls:"bad"}]},
+          {t:"new", cls:"good", c:[{t:"order placed", s:"both legs, or neither", cls:"good"}]},
+        ]},
+      ]},
+    ]};
+    let t=null;
+    return {len:12.5, mount(){ t=buildTree($("#tree2"),T,{colW:268,rowH:66,top:20,nodeW:186}); },
+            update(p){
+              if(!t) this.mount();
+              growTree(t,p,.4,.72);
+              // after the tree is drawn, walk the one surviving path
+              const lit = win(p,4.6,8.2);
+              for(const n of t.all){
+                const onPath = n.cls==="good" || n.t==="clears the spread" || n.t==="passes risk" || n.d===0;
+                const reach = lit*5.4;
+                const active = onPath && reach > n.d;
+                n.el.classList.toggle("hot", active && n.cls!=="good");
+                if(n.edge) n.edge.classList.toggle("lit", active);
+              }
+            }};
+  })();
+
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 director \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  const SCENES=[
+    {id:"sc1",name:"hook",      s:S1},
+    {id:"sc2",name:"the build", s:S2},
+    {id:"sc3",name:"triangular",s:S3},
+    {id:"sc4",name:"pair arb",  s:S4},
+    {id:"sc5",name:"risk",      s:S5},
+    {id:"sc6",name:"nothing",   s:S6},
+    {id:"sc7",name:"paper",     s:S7},
+    {id:"sc8",name:"outcomes",  s:S8},
+  ];
+  const rail=$("#rail");
+  SCENES.forEach((sc,i)=>{
+    const c=mk("div","chip",`<span class="bar"></span><span class="tx">${String(i+1).padStart(2,"0")} ${sc.name}</span>`);
+    c.onclick=()=>go(i); rail.appendChild(c); sc.chip=c; sc.bar=c.querySelector(".bar");
+  });
+
+  let cur=0,phase=0,last=performance.now(),paused=false,loops=0;
+  function go(i){
+    SCENES[cur].chip.classList.remove("act");
+    document.getElementById(SCENES[cur].id).classList.remove("on");
+    cur=(i+SCENES.length)%SCENES.length; phase=0; loops=0;
+    document.getElementById(SCENES[cur].id).classList.add("on");
+    SCENES[cur].chip.classList.add("act");
+    // trees need to measure themselves while their scene is visible
+    if(SCENES[cur].s.mount) SCENES[cur].s.mount();
+    SCENES[cur].s.update(0);
+  }
+  function frame(now){
+    const dt=(now-last)/1000; last=now;
+    if(!paused){
+      phase+=dt;
+      const sc=SCENES[cur];
+      if(phase>=sc.s.len){ phase-=sc.s.len; if(++loops>=2){ go(cur+1); requestAnimationFrame(frame); return; } }
+      sc.s.update(phase);
+      SCENES.forEach((s,i)=>s.bar.style.width = i===cur ? (phase/s.s.len*100)+"%" : "0%");
+    }
+    requestAnimationFrame(frame);
+  }
+  addEventListener("keydown",e=>{
+    if(e.key>="1"&&e.key<="8") go(+e.key-1);
+    else if(e.key==="ArrowRight") go(cur+1);
+    else if(e.key==="ArrowLeft") go(cur-1);
+    else if(e.key===" "){ e.preventDefault(); paused=!paused; }
+    else if(e.key.toLowerCase()==="h") document.body.classList.toggle("bare");
+  });
+
+  window.__broll={go,hold(i,p){go(i);phase=p;SCENES[i].s.update(p);paused=true;}};
+  go(0);
+  if(reduced) SCENES.forEach(s=>{ if(s.s.mount)s.s.mount(); s.s.update(s.s.len*.8); });
+  else requestAnimationFrame(frame);
+})();
+</script>

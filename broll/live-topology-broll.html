@@ -1,0 +1,541 @@
+<title>Cesar Arb Engine — Live Topology</title>
+<style>
+  :root{
+    /* Single committed visual world: a dark-room trading terminal.
+       Ground is ink-blue rather than neutral black so #0A84FF sits in it. */
+    --ink:#060A12;
+    --ink-2:#0A1120;
+    --panel:#0C1424;
+    --panel-2:#101A2E;
+    --line:#1B2740;
+    --line-hot:#26375A;
+    --text:#E8EEF9;
+    --dim:#8296B4;
+    --faint:#5A6C88;
+    --blue:#0A84FF;
+    --blue-soft:#4FA9FF;
+    --green:#2FD35E;
+    --amber:#FFA318;
+    --red:#FF4F42;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+  }
+
+  html,body{height:100%;}
+  body{
+    background:
+      radial-gradient(120% 90% at 50% -20%, #0E1A31 0%, transparent 60%),
+      radial-gradient(80% 60% at 50% 120%, #0B1626 0%, transparent 55%),
+      var(--ink);
+    color:var(--text);
+    font-family:var(--sans);
+    display:grid;
+    place-items:center;
+    overflow:hidden;
+  }
+
+  /* Fixed 16:9 stage, scaled to fit — so a screen recording is pixel-stable. */
+  #fit{position:fixed;inset:0;display:grid;place-items:center;}
+  #stage{
+    width:1440px;height:810px;
+    transform-origin:center center;
+    position:relative;
+    display:grid;
+    grid-template-rows:auto 1fr auto;
+    padding:30px 40px 24px;
+    gap:20px;
+  }
+
+  /* ---------- header ---------- */
+  header{display:flex;align-items:flex-end;justify-content:space-between;gap:40px;}
+  .brand{display:flex;flex-direction:column;gap:7px;}
+  .kicker{
+    font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--faint);display:flex;align-items:center;gap:9px;
+  }
+  .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(47,211,94,.6);animation:beat 2.4s ease-out infinite;}
+  @keyframes beat{0%{box-shadow:0 0 0 0 rgba(47,211,94,.55)}70%{box-shadow:0 0 0 9px rgba(47,211,94,0)}100%{box-shadow:0 0 0 0 rgba(47,211,94,0)}}
+  h1{font-size:27px;font-weight:640;letter-spacing:-.022em;line-height:1;}
+  h1 span{color:var(--faint);font-weight:400;}
+
+  .readout{display:flex;gap:0;align-items:stretch;}
+  .stat{padding:0 20px;border-left:1px solid var(--line);display:flex;flex-direction:column;gap:5px;min-width:96px;}
+  .stat:first-child{border-left:0;}
+  .stat b{font-family:var(--mono);font-size:23px;font-weight:520;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1;}
+  .stat i{font-style:normal;font-family:var(--mono);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);}
+  .stat.ok b{color:var(--green);} .stat.no b{color:var(--dim);} .stat.hi b{color:var(--blue-soft);}
+
+  /* ---------- board ---------- */
+  #board{position:relative;display:grid;grid-template-columns:196px 210px 300px 236px 214px;gap:56px;align-items:start;}
+  #wires{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;}
+
+  .col{display:flex;flex-direction:column;gap:11px;position:relative;z-index:2;}
+  .col > .colhead{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--faint);
+    display:flex;align-items:center;gap:8px;padding-bottom:2px;
+  }
+  .colhead .n{color:var(--line-hot);}
+  .colhead::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent);}
+
+  .node{
+    background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line);border-radius:11px;padding:12px 13px;
+    display:flex;flex-direction:column;gap:7px;
+    box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 10px 24px -18px #000;
+    transition:border-color .3s, box-shadow .3s, transform .3s;
+  }
+  .node.lit{border-color:var(--line-hot);box-shadow:0 0 0 1px rgba(10,132,255,.18), 0 0 28px -8px rgba(10,132,255,.45);}
+  .node .t{font-family:var(--mono);font-size:12.5px;letter-spacing:-.01em;color:var(--text);display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .node .s{font-size:11px;line-height:1.42;color:var(--dim);}
+  .node .m{font-family:var(--mono);font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;display:flex;justify-content:space-between;}
+
+  .tag{font-family:var(--mono);font-size:8.5px;letter-spacing:.13em;text-transform:uppercase;padding:2.5px 6px;border-radius:4px;white-space:nowrap;}
+  .tag.live{color:var(--green);background:rgba(47,211,94,.1);border:1px solid rgba(47,211,94,.28);}
+  .tag.read{color:var(--faint);background:rgba(130,150,180,.07);border:1px solid var(--line);}
+  .tag.hold{color:var(--amber);background:rgba(255,163,24,.1);border:1px solid rgba(255,163,24,.26);}
+
+  /* gate stack */
+  .gatepanel{
+    background:linear-gradient(180deg,rgba(16,26,46,.9),rgba(12,20,36,.9));
+    border:1px solid var(--line);border-radius:12px;padding:9px;display:flex;flex-direction:column;gap:6px;
+  }
+  .gate{
+    display:grid;grid-template-columns:16px 1fr auto;align-items:center;gap:9px;
+    padding:8px 10px;border-radius:7px;border:1px solid transparent;background:rgba(6,10,18,.55);
+    transition:background .25s, border-color .25s;
+  }
+  .gate .idx{font-family:var(--mono);font-size:9px;color:var(--line-hot);text-align:right;}
+  .gate .lab{font-family:var(--mono);font-size:11px;color:var(--text);letter-spacing:-.01em;}
+  .gate .lab em{font-style:normal;display:block;font-family:var(--sans);font-size:10px;color:var(--faint);margin-top:2px;line-height:1.3;}
+  .gate .cnt{font-family:var(--mono);font-size:10px;color:var(--faint);font-variant-numeric:tabular-nums;}
+  .gate.trip{background:rgba(255,79,66,.13);border-color:rgba(255,79,66,.42);}
+  .gate.trip .cnt{color:var(--red);}
+  .gate.pass{background:rgba(47,211,94,.1);border-color:rgba(47,211,94,.32);}
+
+  /* executor steps */
+  .step{display:flex;align-items:center;gap:9px;font-family:var(--mono);font-size:10.5px;color:var(--dim);}
+  .step .dot{width:5px;height:5px;border-radius:50%;background:var(--line-hot);flex:none;transition:background .25s,box-shadow .25s;}
+  .step.on .dot{background:var(--green);box-shadow:0 0 9px rgba(47,211,94,.8);}
+  .step.on{color:var(--text);}
+
+  /* ---------- console ---------- */
+  footer{display:grid;grid-template-columns:1fr 300px;gap:34px;align-items:end;border-top:1px solid var(--line);padding-top:13px;}
+  #log{font-family:var(--mono);font-size:11px;line-height:1.72;height:78px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;}
+  #log div{display:flex;gap:11px;white-space:nowrap;animation:slip .34s ease-out;}
+  @keyframes slip{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  #log .ts{color:var(--line-hot);font-variant-numeric:tabular-nums;}
+  #log .lv{width:44px;}
+  #log .ms{color:var(--dim);}
+  #log .info .lv{color:var(--blue-soft);}
+  #log .skip .lv{color:var(--faint);}
+  #log .warn .lv{color:var(--amber);}
+  #log .fill .lv{color:var(--green);} #log .fill .ms{color:var(--text);}
+
+  .legend{display:flex;flex-direction:column;gap:7px;align-items:flex-end;}
+  .lrow{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);}
+  .swatch{width:22px;height:2px;border-radius:2px;}
+
+  @media (prefers-reduced-motion: reduce){
+    .pulse{animation:none;} #log div{animation:none;}
+  }
+</style>
+
+<div id="fit"><div id="stage">
+
+  <header>
+    <div class="brand">
+      <div class="kicker"><span class="pulse"></span>Engine · polymarket-us · live · dry-run off</div>
+      <h1>Cesar Arb Engine <span>— scan loop topology</span></h1>
+    </div>
+    <div class="readout">
+      <div class="stat hi"><b id="s-tick">0</b><i>ticks</i></div>
+      <div class="stat"><b id="s-cand">0</b><i>candidates</i></div>
+      <div class="stat no"><b id="s-gate">0</b><i>gated</i></div>
+      <div class="stat ok"><b id="s-fill">0</b><i>fills</i></div>
+      <div class="stat ok"><b id="s-pnl">$0.00</b><i>realized</i></div>
+    </div>
+  </header>
+
+  <div id="board">
+    <svg id="wires"></svg>
+
+    <div class="col">
+      <div class="colhead"><span class="n">01</span>Market data</div>
+      <div class="node" id="n-qcex">
+        <div class="t">Polymarket&nbsp;US <span class="tag live">live</span></div>
+        <div class="s">QCEX order books. One matched book per outcome; siblings priced independently.</div>
+        <div class="m"><span>markets</span><span id="mc-us">—</span></div>
+      </div>
+      <div class="node" id="n-poly">
+        <div class="t">Polymarket <span class="tag read">data only</span></div>
+        <div class="s">Global CLOB. Read for signal; legs are not live-routed.</div>
+        <div class="m"><span>markets</span><span id="mc-poly">—</span></div>
+      </div>
+      <div class="node" id="n-recon">
+        <div class="t">Positions <span class="tag hold">10 min</span></div>
+        <div class="s">Exchange holdings + buying power, reconciled against the ledger.</div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="colhead"><span class="n">02</span>Scanners</div>
+      <div class="node" id="n-sc1">
+        <div class="t">us-event-arb</div>
+        <div class="s">Groups an event's markets by type, sums best asks across the outcome set, nets QCEX fees out of the edge.</div>
+        <div class="m"><span>fee ≈ .06·p(1−p)</span><span>per leg</span></div>
+      </div>
+      <div class="node" id="n-sc2">
+        <div class="t">poly-intra-market</div>
+        <div class="s">YES + NO under $1 on the global book.</div>
+      </div>
+      <div class="node" id="n-filter">
+        <div class="t">Edge filter</div>
+        <div class="s">Net edge must clear the minimum and the basket must be exhaustive — sports outcome sets only.</div>
+        <div class="m"><span>min edge</span><span>4.00%</span></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="colhead"><span class="n">03</span>Gates — every one must pass</div>
+      <div class="gatepanel" id="gatepanel">
+        <div class="gate" data-g="0"><span class="idx">1</span><span class="lab">routing<em>Rejects a basket that spans live and simulated venues</em></span><span class="cnt" data-c>0</span></div>
+        <div class="gate" data-g="1"><span class="idx">2</span><span class="lab">paper route<em>No live venue on these legs — never simulate a fill</em></span><span class="cnt" data-c>0</span></div>
+        <div class="gate" data-g="2"><span class="idx">3</span><span class="lab">risk guard<em>Trade size, daily exposure, loss cap, kill switch</em></span><span class="cnt" data-c>0</span></div>
+        <div class="gate" data-g="3"><span class="idx">4</span><span class="lab">dedupe<em>Same legs already fired inside 10 minutes</em></span><span class="cnt" data-c>0</span></div>
+        <div class="gate" data-g="4"><span class="idx">5</span><span class="lab">concentration<em>Already holding this event — capital stays locked until it resolves</em></span><span class="cnt" data-c>0</span></div>
+        <div class="gate" data-g="5"><span class="idx">6</span><span class="lab">buying power<em>Exchange cash must cover the whole basket</em></span><span class="cnt" data-c>0</span></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="colhead"><span class="n">04</span>Execution</div>
+      <div class="node" id="n-exec">
+        <div class="t">PolymarketUsExecutor</div>
+        <div class="s">Signed IOC orders, one per outcome, fired in sequence.</div>
+        <div class="step" data-s="0"><span class="dot"></span>place every leg</div>
+        <div class="step" data-s="1"><span class="dot"></span>trim surplus to hedged ratio</div>
+        <div class="step" data-s="2"><span class="dot"></span>unwind if a leg fails</div>
+      </div>
+      <div class="node" id="n-book">
+        <div class="t">Fill record</div>
+        <div class="s">Payoff is the thinnest leg. P&amp;L = payoff − cash − fees, netted by symbol so unwinds subtract.</div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="colhead"><span class="n">05</span>State</div>
+      <div class="node" id="n-db">
+        <div class="t">SQLite <span class="tag read">/data</span></div>
+        <div class="s">Append-only trades, opportunities, daily state, saved limits.</div>
+      </div>
+      <div class="node" id="n-api">
+        <div class="t">Fastify :4000</div>
+        <div class="s">status · opportunities · trades · limits · kill switch</div>
+      </div>
+      <div class="node" id="n-ui">
+        <div class="t">Dashboard</div>
+        <div class="s">Next.js. Live edges, ledger, risk limits, and the kill switch.</div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div id="log"></div>
+    <div class="legend">
+      <div class="lrow"><span class="swatch" style="background:var(--blue)"></span>candidate in flight</div>
+      <div class="lrow"><span class="swatch" style="background:var(--red)"></span>rejected at a gate</div>
+      <div class="lrow"><span class="swatch" style="background:var(--green)"></span>filled &amp; booked</div>
+    </div>
+  </footer>
+
+</div></div>
+
+<script>
+(() => {
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const stage = document.getElementById("stage");
+  const board = document.getElementById("board");
+  const svg   = document.getElementById("wires");
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- fit the fixed stage into whatever viewport we're recorded in ---------- */
+  function fit(){
+    const s = Math.min(innerWidth / 1440, innerHeight / 810);
+    stage.style.transform = `scale(${s})`;
+    return s;
+  }
+
+  /* ---------- geometry ---------- */
+  const el = id => document.getElementById(id);
+  let scale = 1;
+  function box(node){
+    const b = node.getBoundingClientRect(), o = board.getBoundingClientRect();
+    return { x:(b.left-o.left)/scale, y:(b.top-o.top)/scale, w:b.width/scale, h:b.height/scale,
+             get cx(){return this.x+this.w/2}, get cy(){return this.y+this.h/2},
+             get r(){return this.x+this.w}, get b(){return this.y+this.h} };
+  }
+  const L = n => { const k = box(n); return {x:k.x, y:k.cy}; };
+  const R = n => { const k = box(n); return {x:k.r, y:k.cy}; };
+
+  /* Orthogonal routing with rounded corners — a circuit trace, not an organic curve. */
+  function trace(pts, rad=9){
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for(let i=1;i<pts.length-1;i++){
+      const p=pts[i], a=pts[i-1], b=pts[i+1];
+      const v1={x:p.x-a.x,y:p.y-a.y}, v2={x:b.x-p.x,y:b.y-p.y};
+      const l1=Math.hypot(v1.x,v1.y)||1, l2=Math.hypot(v2.x,v2.y)||1;
+      const r=Math.min(rad,l1/2,l2/2);
+      d += ` L ${p.x-v1.x/l1*r} ${p.y-v1.y/l1*r} Q ${p.x} ${p.y} ${p.x+v2.x/l2*r} ${p.y+v2.y/l2*r}`;
+    }
+    const e=pts[pts.length-1];
+    return d + ` L ${e.x} ${e.y}`;
+  }
+  function wire(pts, cls){
+    const p = document.createElementNS(SVGNS,"path");
+    p.setAttribute("d", trace(pts));
+    p.setAttribute("class", cls);
+    svg.appendChild(p);
+    return p;
+  }
+
+  const gates = [...document.querySelectorAll(".gate")];
+  const steps = [...document.querySelectorAll(".step")];
+
+  /* Built on every layout pass: the one path a candidate travels, plus the
+     length at which each gate sits so a rejection stops exactly there. */
+  let MAIN = null, GATE_AT = [], EXEC_AT = 0, DB_AT = 0;
+
+  function build(){
+    scale = fit();
+    svg.innerHTML = "";
+
+    const gp = box(el("gatepanel"));
+    const feedY = box(board).h + 4;
+
+    // ---- static traces: sources into scanners, scanners into the filter ----
+    const src = [[el("n-qcex"),el("n-sc1")],[el("n-poly"),el("n-sc2")],[el("n-qcex"),el("n-sc2")]];
+    for(const [a,b] of src){
+      const A=R(a), B=L(b), mx=(A.x+B.x)/2;
+      wire([A,{x:mx,y:A.y},{x:mx,y:B.y},B], "w");
+    }
+    for(const s of [el("n-sc1"),el("n-sc2")]){
+      const A=R(s), F=L(el("n-filter")), mx=(A.x+F.x)/2 + 14;
+      wire([A,{x:mx,y:A.y},{x:mx,y:F.y},F], "w");
+    }
+
+    // ---- feedback loop: reconciliation informs the concentration gate ----
+    const rc = box(el("n-recon")), g4 = box(gates[4]);
+    const fb = wire([{x:rc.cx,y:rc.b},{x:rc.cx,y:feedY},{x:gp.cx,y:feedY},{x:gp.cx,y:gp.b}], "w feed");
+    fb.id = "feedwire";
+    const fbLbl = document.createElementNS(SVGNS,"text");
+    fbLbl.setAttribute("x", (rc.cx+gp.cx)/2); fbLbl.setAttribute("y", feedY-9);
+    fbLbl.setAttribute("class","wlabel"); fbLbl.setAttribute("text-anchor","middle");
+    fbLbl.textContent = "held positions · buying power";
+    svg.appendChild(fbLbl);
+
+    // ---- the main run: filter → serpentine through all six gates → executor → state ----
+    const F = R(el("n-filter"));
+    const inX = gp.x - 22, outX = gp.r + 22;
+    const pts = [F, {x:inX, y:F.y}];
+    gates.forEach((g,i) => {
+      const b = box(g);
+      pts.push({x:inX, y:b.cy}, {x:outX, y:b.cy});
+      if(i < gates.length-1) pts.push({x:outX, y:b.cy+b.h/2+3}, {x:inX, y:b.cy+b.h/2+3});
+    });
+    const ex = box(el("n-exec")), bk = box(el("n-book")), db = box(el("n-db")),
+          api = box(el("n-api")), ui = box(el("n-ui"));
+    const exMid = (outX + ex.x)/2;
+    pts.push({x:exMid, y:pts[pts.length-1].y}, {x:exMid, y:ex.cy}, {x:ex.x, y:ex.cy});
+    pts.push({x:ex.r, y:ex.cy}, {x:ex.r+13, y:ex.cy}, {x:ex.r+13, y:bk.cy}, {x:bk.r, y:bk.cy});
+    const dbMid = (bk.r + db.x)/2;
+    pts.push({x:dbMid, y:bk.cy}, {x:dbMid, y:db.cy}, {x:db.x, y:db.cy});
+    pts.push({x:db.r, y:db.cy}, {x:db.r+13, y:db.cy}, {x:db.r+13, y:ui.cy}, {x:db.r+13, y:api.cy});
+
+    MAIN = wire(pts, "w main");
+
+    // Distance to each waypoint → where along the path each stage sits.
+    const cum = [0];
+    for(let i=1;i<pts.length;i++) cum.push(cum[i-1] + Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y));
+    const total = cum[cum.length-1], len = MAIN.getTotalLength();
+    const at = i => cum[i] / total * len;
+    GATE_AT = gates.map((_,i) => at(2 + i*4 + 1));           // exit side of gate i
+    EXEC_AT = at(2 + (gates.length-1)*4 + 1 + 3);            // arrival at the executor
+    DB_AT   = at(pts.length - 5);                            // ledger write
+    document.getElementById("s-len") && 0;
+  }
+
+  /* ---------- particles ---------- */
+  const layer = document.createElementNS(SVGNS,"g");
+  const stats = { tick:0, cand:0, gate:0, fill:0, pnl:0 };
+  const $ = id => document.getElementById(id);
+
+  function bump(id, val){ $(id).textContent = val; }
+  function paint(){
+    bump("s-tick", stats.tick); bump("s-cand", stats.cand);
+    bump("s-gate", stats.gate); bump("s-fill", stats.fill);
+    $("s-pnl").textContent = "$" + stats.pnl.toFixed(2);
+  }
+
+  const clock = { t: 9*3600 + 41*60 + 12 };
+  function stamp(){
+    clock.t += 3 + Math.floor(Math.random()*5);
+    const h=Math.floor(clock.t/3600)%24, m=Math.floor(clock.t/60)%60, s=clock.t%60;
+    return [h,m,s].map(v=>String(v).padStart(2,"0")).join(":");
+  }
+  const logbox = $("log");
+  function say(level, msg){
+    const row = document.createElement("div");
+    row.className = level;
+    row.innerHTML = `<span class="ts">${stamp()}</span><span class="lv">${level.toUpperCase()}</span><span class="ms">${msg}</span>`;
+    logbox.appendChild(row);
+    while(logbox.children.length > 5) logbox.firstChild.remove();
+  }
+
+  const EVENTS = [
+    ["Chiefs @ Bills", "moneyline", 2], ["NL Champion", "futures", 6],
+    ["Man City vs Arsenal", "drawable_outcome", 3], ["NFC East Winner", "futures", 4],
+    ["Lakers @ Celtics", "moneyline", 2], ["Premier League Winner", "futures", 8],
+    ["Dodgers @ Padres", "moneyline", 2], ["Serie A Champion", "futures", 5],
+  ];
+  const GATE_MSG = [
+    e => `SKIPPED: ${e} spans live and simulated venues — one leg real, its hedge fake`,
+    e => `skip: no live-routed venue for ${e} — not simulating a fill`,
+    e => `skip: ${e} — daily exposure cap reached`,
+    e => `skip duplicate: ${e} fired 4m ago, inside the 10 min window`,
+    e => `skip: already holding ${e} — capital locked until it resolves`,
+    e => `skip: buying power below basket cost on ${e} — deposit or wait for resolution`,
+  ];
+
+  function flash(node, cls, ms=620){
+    node.classList.add(cls);
+    setTimeout(() => node.classList.remove(cls), ms);
+  }
+
+  function spawn(){
+    if(!MAIN) return;
+    const [name, type, legs] = EVENTS[Math.floor(Math.random()*EVENTS.length)];
+    const label = `${name} (${legs}-leg ${type})`;
+    const edge = 3.2 + Math.random()*5.6;
+    stats.cand++;
+
+    // Most candidates never clear the fee-netted minimum — that is the honest
+    // shape of this book, so most particles die at the filter.
+    const passesEdge = edge >= 4.0 && Math.random() < 0.45;
+    let stopGate = -1;
+    if(passesEdge){
+      const r = Math.random();
+      stopGate = r<.30 ? 3 : r<.50 ? 4 : r<.62 ? 5 : r<.70 ? 2 : r<.76 ? 1 : r<.80 ? 0 : -1;
+    }
+
+    const dot = document.createElementNS(SVGNS,"circle");
+    dot.setAttribute("r", 3.4);
+    dot.setAttribute("class", "p");
+    svg.appendChild(dot);
+
+    const len = MAIN.getTotalLength();
+    const end = !passesEdge ? MAIN.getTotalLength()*0 + (GATE_AT[0] - 46)
+              : stopGate >= 0 ? GATE_AT[stopGate] : len;
+    const speed = 340; // px/s along the trace
+    const dur = (end / speed) * 1000;
+    const t0 = performance.now();
+    let firedExec = false, firedDb = false;
+
+    function frame(now){
+      const k = Math.min(1, (now - t0) / dur);
+      const d = end * k;
+      const pt = MAIN.getPointAtLength(d);
+      dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y);
+
+      if(!firedExec && d >= EXEC_AT && stopGate === -1 && passesEdge){
+        firedExec = true;
+        flash(el("n-exec"), "lit", 1500);
+        steps.forEach((s,i) => setTimeout(() => { s.classList.add("on"); setTimeout(()=>s.classList.remove("on"), 700); }, i*190));
+        say("info", `placing ${legs} legs on ${name} — ${edge.toFixed(2)}% net edge`);
+      }
+      if(!firedDb && d >= DB_AT && stopGate === -1 && passesEdge){
+        firedDb = true;
+        [el("n-book"),el("n-db"),el("n-api"),el("n-ui")].forEach((n,i)=>setTimeout(()=>flash(n,"lit",900), i*130));
+      }
+
+      if(k < 1){ requestAnimationFrame(frame); return; }
+
+      if(!passesEdge){
+        dot.classList.add("dead");
+        flash(el("n-filter"), "lit", 400);
+        if(Math.random() < 0.30) say("skip", `${label} — ${edge.toFixed(2)}% edge below 4.00% after fees`);
+      } else if(stopGate >= 0){
+        dot.classList.add("dead");
+        stats.gate++;
+        const g = gates[stopGate];
+        flash(g, "trip", 900);
+        const c = g.querySelector("[data-c]");
+        c.textContent = +c.textContent + 1;
+        say(stopGate < 2 ? "warn" : "skip", GATE_MSG[stopGate](label));
+      } else {
+        dot.classList.add("hit");
+        stats.fill++;
+        const profit = 0.18 + Math.random()*1.9;
+        stats.pnl += profit;
+        gates.forEach(g => flash(g, "pass", 700));
+        say("fill", `trade closed — ${name}, ${legs} legs hedged, +$${profit.toFixed(2)} booked`);
+      }
+      paint();
+      setTimeout(() => dot.remove(), 620);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /* Reconciliation pulse: exchange truth flowing back into the gates. */
+  function reconcile(){
+    const w = document.getElementById("feedwire");
+    if(!w) return;
+    const len = w.getTotalLength();
+    const dot = document.createElementNS(SVGNS,"circle");
+    dot.setAttribute("r", 2.8); dot.setAttribute("class","p feedp");
+    svg.appendChild(dot);
+    const t0 = performance.now(), dur = 2100;
+    (function step(now){
+      const k = Math.min(1,(now-t0)/dur);
+      const pt = w.getPointAtLength(len * (1-k));   // travels right-to-left back into the gate stack
+      dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y);
+      if(k<1) requestAnimationFrame(step);
+      else { flash(gates[4], "pass", 700); flash(el("n-recon"),"lit",900); dot.remove(); }
+    })(performance.now());
+    say("info", "reconciled — exchange positions match the ledger, buying power $" + (40 + Math.random()*160).toFixed(2));
+  }
+
+  /* ---------- run ---------- */
+  const style = document.createElementNS(SVGNS,"style");
+  style.textContent = `
+    .w{fill:none;stroke:#1B2740;stroke-width:1.1;}
+    .w.main{stroke:#20355C;stroke-width:1.3;stroke-dasharray:3 5;}
+    .w.feed{stroke:#1B2740;stroke-dasharray:2 6;}
+    .wlabel{fill:#5A6C88;font-family:ui-monospace,Menlo,monospace;font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;}
+    .p{fill:#4FA9FF;filter:drop-shadow(0 0 5px rgba(79,169,255,.95));transition:fill .2s, r .2s;}
+    .p.feedp{fill:#FFA318;filter:drop-shadow(0 0 5px rgba(255,163,24,.8));}
+    .p.dead{fill:#FF4F42;filter:drop-shadow(0 0 8px rgba(255,79,66,.9));animation:die .6s ease-out forwards;}
+    .p.hit{fill:#2FD35E;filter:drop-shadow(0 0 11px rgba(47,211,94,1));animation:pop .6s ease-out forwards;}
+    @keyframes die{to{opacity:0;r:9}}
+    @keyframes pop{40%{r:7}to{opacity:0;r:13}}
+  `;
+  svg.appendChild(style);
+
+  function relayout(){ build(); }
+  addEventListener("resize", relayout);
+  requestAnimationFrame(() => { relayout(); requestAnimationFrame(relayout); });
+
+  // Market counts settle in like a real first tick.
+  setTimeout(() => { $("mc-us").textContent = "1,284"; $("mc-poly").textContent = "3,910"; }, 900);
+  say("info", "engine started — mode live, LIVE_VENUES=polymarket-us");
+
+  if(!reduced){
+    setInterval(() => { stats.tick++; paint(); }, 5000);
+    setTimeout(() => setInterval(spawn, 900), 700);
+    setInterval(reconcile, 17000);
+    setTimeout(reconcile, 5200);
+  } else {
+    stats.tick = 412; stats.cand = 3180; stats.gate = 46; stats.fill = 9; stats.pnl = 7.44; paint();
+  }
+  paint();
+})();
+</script>
