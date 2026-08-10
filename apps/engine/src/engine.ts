@@ -627,7 +627,7 @@ export class Engine {
         realOrderTransmissionConfigured:
           this.mode === 'live' &&
           !this.config.execution.dryRun &&
-          this.config.execution.liveVenues.length > 0,
+          this.liveRoutedVenues.size > 0,
       },
       running: this.running,
       killSwitch: this.killSwitch,
@@ -730,7 +730,7 @@ export class Engine {
       tradable.sort((a, b) => b.edgePct - a.edgePct);
 
       for (const o of candidates) {
-        this.storage.recordOpportunity(o, o.edgePct >= minEdge);
+        this.storage.recordOpportunity(o, o.edgePct >= minEdge && !o.requiresReview);
       }
 
       this.candidateCount += candidates.length;

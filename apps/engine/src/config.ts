@@ -114,7 +114,8 @@ export function loadConfig(): EngineConfig {
       // real order to be transmitted — any other value keeps the dry run.
       dryRun: str('EXECUTION_DRY_RUN', 'true') !== 'false',
       liveVenues: parseVenueList(str('LIVE_VENUES', '')),
-      maxSettlementDays: num('MAX_SETTLEMENT_DAYS', 14),
+      // Operators may lower the cap, but can never raise the live invariant.
+      maxSettlementDays: Math.min(14, Math.max(0, num('MAX_SETTLEMENT_DAYS', 14))),
     },
   };
 }

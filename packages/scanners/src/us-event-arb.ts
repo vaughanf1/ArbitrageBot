@@ -34,6 +34,7 @@ import { newOpportunityId, type Scanner } from './base.js';
  * $0.68 on 50 @ 0.35, $0.01 on 1 @ 0.48.
  */
 const US_FEE_RATE = 0.06;
+const MAX_AUTO_SETTLEMENT_DAYS = 14;
 
 export interface UsEventArbScannerOptions {
   executor: PolymarketUsExecutor;
@@ -74,7 +75,10 @@ export class UsEventArbScanner implements Scanner {
     this.maxLegs = opts.maxLegs ?? 12;
     this.maxBooks = opts.maxBooks ?? 60;
     this.maxResults = opts.maxResults ?? 25;
-    this.maxSettlementDays = opts.maxSettlementDays ?? 14;
+    this.maxSettlementDays = Math.min(
+      MAX_AUTO_SETTLEMENT_DAYS,
+      Math.max(0, opts.maxSettlementDays ?? MAX_AUTO_SETTLEMENT_DAYS),
+    );
     this.ttlMs = opts.ttlMs ?? 6_000;
   }
 
@@ -231,7 +235,9 @@ export class UsEventArbScanner implements Scanner {
         settlementDays <= this.maxSettlementDays;
       const settlementReason = settlementDays === null
         ? ' Settlement date unavailable — blocked from auto-trading.'
-        : settlementDays > this.maxSettlementDays
+        : settlementDays < 0
+          ? ' Settlement time has already ended — blocked from auto-trading.'
+          : settlementDays > this.maxSettlementDays
           ? ` Capital locked for ${settlementDays} days (maximum ${this.maxSettlementDays}) — review only.`
           : ` Settles in ${settlementDays} day${settlementDays === 1 ? '' : 's'}.`;
 
@@ -269,22 +275,22 @@ export class UsEventArbScanner implements Scanner {
 }
 
 function basketEndDate(eventEndDate: string | null, markets: UsEvent['markets']): string | null {
-  const dates = markets
-    .map((market) => market.endDate)
-    .filter((value): value is string => Boolean(value))
+  // Every source must be present. One missing leg can conceal a much later
+  // maturity, so partial metadata is unsafe for automatic live execution.
+  if (!eventEndDate || markets.some((market) => !market.endDate)) return null;
+  const dates = [eventEndDate, ...markets.map((market) => market.endDate!)]
     .map((value) => ({ value, timestamp: Date.parse(value) }))
     .filter((entry) => Number.isFinite(entry.timestamp));
-  if (dates.length > 0) {
-    dates.sort((a, b) => b.timestamp - a.timestamp);
-    return dates[0]!.value;
-  }
-  return eventEndDate;
+  if (dates.length !== markets.length + 1) return null;
+  dates.sort((a, b) => b.timestamp - a.timestamp);
+  return dates[0]!.value;
 }
 
 export function daysUntilSettlement(endDate: string | null, now: number = Date.now()): number | null {
   if (!endDate) return null;
   const timestamp = Date.parse(endDate);
   if (!Number.isFinite(timestamp)) return null;
+  if (timestamp <= now) return -1;
   return Math.ceil((timestamp - now) / 86_400_000);
 }
 
