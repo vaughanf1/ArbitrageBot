@@ -64,7 +64,7 @@ export interface EngineConfig {
    * before any money moves. Flip EXECUTION_DRY_RUN=false only after a clean
    * dry-run, and start with tiny size.
    */
-  execution: { dryRun: boolean; liveVenues: Venue[] };
+  execution: { dryRun: boolean; liveVenues: Venue[]; maxSettlementDays: number };
 }
 
 export function loadConfig(): EngineConfig {
@@ -114,6 +114,7 @@ export function loadConfig(): EngineConfig {
       // real order to be transmitted — any other value keeps the dry run.
       dryRun: str('EXECUTION_DRY_RUN', 'true') !== 'false',
       liveVenues: parseVenueList(str('LIVE_VENUES', '')),
+      maxSettlementDays: num('MAX_SETTLEMENT_DAYS', 14),
     },
   };
 }

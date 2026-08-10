@@ -68,6 +68,7 @@ The kill switch also auto-engages if today's P&L hits −5% of starting equity. 
 | `MAX_DAILY_LOSS_PCT` | 5 | Auto-engages kill switch if hit |
 | `TRAILING_STOP_PCT` | 5 | Trailing stop (unused in v1 — both strategies close in one tick) |
 | `MIN_SPREAD_PCT` | 0.05 | Minimum edge for auto-trade |
+| `MAX_SETTLEMENT_DAYS` | 14 | Maximum time live capital may be locked; longer/unknown maturities are review-only |
 | `PREDICTION_MATCH_MODE` | `strict` | `allowlist` = only curated pairs auto-trade; `strict` = also surface heuristic matches for review (but they never auto-trade) |
 | `STARTING_EQUITY_USD` | 10000 | Used as base for daily loss-cap calculation |
 

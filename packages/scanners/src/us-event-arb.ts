@@ -47,6 +47,8 @@ export interface UsEventArbScannerOptions {
   maxBooks?: number;
   /** Max candidates emitted per scan (strongest first). Default 25. */
   maxResults?: number;
+  /** Maximum days live capital may remain locked before settlement. Default 14. */
+  maxSettlementDays?: number;
   ttlMs?: number;
 }
 
@@ -59,6 +61,7 @@ export class UsEventArbScanner implements Scanner {
   private readonly maxLegs: number;
   private readonly maxBooks: number;
   private readonly maxResults: number;
+  private readonly maxSettlementDays: number;
   private readonly ttlMs: number;
   /** Rotating cursor so successive ticks cover different events. */
   private cursor = 0;
@@ -71,6 +74,7 @@ export class UsEventArbScanner implements Scanner {
     this.maxLegs = opts.maxLegs ?? 12;
     this.maxBooks = opts.maxBooks ?? 60;
     this.maxResults = opts.maxResults ?? 25;
+    this.maxSettlementDays = opts.maxSettlementDays ?? 14;
     this.ttlMs = opts.ttlMs ?? 6_000;
   }
 
@@ -100,6 +104,7 @@ export class UsEventArbScanner implements Scanner {
       groupType: string;
       markets: UsEvent['markets'];
       exhaustive: boolean;
+      endDate: string | null;
     }
     const candidates: Basket[] = [];
     for (const e of events) {
@@ -111,11 +116,25 @@ export class UsEventArbScanner implements Scanner {
       }
       const draw = byType.get('drawable_outcome');
       if (draw?.length === 3) {
-        candidates.push({ title: e.title, category: e.category, groupType: 'drawable_outcome', markets: draw, exhaustive: true });
+        candidates.push({
+          title: e.title,
+          category: e.category,
+          groupType: 'drawable_outcome',
+          markets: draw,
+          exhaustive: true,
+          endDate: basketEndDate(e.endDate, draw),
+        });
       }
       const ml = byType.get('moneyline');
       if (ml?.length === 2) {
-        candidates.push({ title: e.title, category: e.category, groupType: 'moneyline', markets: ml, exhaustive: true });
+        candidates.push({
+          title: e.title,
+          category: e.category,
+          groupType: 'moneyline',
+          markets: ml,
+          exhaustive: true,
+          endDate: basketEndDate(e.endDate, ml),
+        });
       }
       const fut = byType.get('futures');
       if (fut && fut.length >= 2 && fut.length <= this.maxLegs) {
@@ -125,6 +144,7 @@ export class UsEventArbScanner implements Scanner {
           groupType: 'futures',
           markets: fut,
           exhaustive: e.category === 'sports',
+          endDate: basketEndDate(e.endDate, fut),
         });
       }
     }
@@ -204,6 +224,16 @@ export class UsEventArbScanner implements Scanner {
       // sports. A non-exhaustive basket under $1 is a directional bet, not an
       // arb — review only.
       const exhaustive = event.exhaustive;
+      const settlementDays = daysUntilSettlement(event.endDate, now);
+      const capitalEfficient =
+        settlementDays !== null &&
+        settlementDays >= 0 &&
+        settlementDays <= this.maxSettlementDays;
+      const settlementReason = settlementDays === null
+        ? ' Settlement date unavailable — blocked from auto-trading.'
+        : settlementDays > this.maxSettlementDays
+          ? ` Capital locked for ${settlementDays} days (maximum ${this.maxSettlementDays}) — review only.`
+          : ` Settles in ${settlementDays} day${settlementDays === 1 ? '' : 's'}.`;
 
       out.push({
         id: newOpportunityId('use'),
@@ -224,17 +254,38 @@ export class UsEventArbScanner implements Scanner {
           `. Fillable size ${qty} contracts (shallowest book ${maxQtyByBook.toFixed(0)}). ` +
           (exhaustive
             ? 'Sports outcome set — exhaustive by construction, one leg must pay.'
-            : 'NON-sports event: outcome set may not be exhaustive — review before trading.'),
+            : 'NON-sports event: outcome set may not be exhaustive — review before trading.') +
+          settlementReason,
         detectedAt: now,
         expiresAt: now + this.ttlMs,
-        source: exhaustive ? 'confirmed' : 'heuristic',
-        requiresReview: !exhaustive,
+        source: exhaustive && capitalEfficient ? 'confirmed' : 'heuristic',
+        requiresReview: !exhaustive || !capitalEfficient,
       });
     }
 
     out.sort((a, b) => b.edgePct - a.edgePct);
     return out.slice(0, this.maxResults);
   }
+}
+
+function basketEndDate(eventEndDate: string | null, markets: UsEvent['markets']): string | null {
+  const dates = markets
+    .map((market) => market.endDate)
+    .filter((value): value is string => Boolean(value))
+    .map((value) => ({ value, timestamp: Date.parse(value) }))
+    .filter((entry) => Number.isFinite(entry.timestamp));
+  if (dates.length > 0) {
+    dates.sort((a, b) => b.timestamp - a.timestamp);
+    return dates[0]!.value;
+  }
+  return eventEndDate;
+}
+
+export function daysUntilSettlement(endDate: string | null, now: number = Date.now()): number | null {
+  if (!endDate) return null;
+  const timestamp = Date.parse(endDate);
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.ceil((timestamp - now) / 86_400_000);
 }
 
 function truncate(s: string, n: number): string {

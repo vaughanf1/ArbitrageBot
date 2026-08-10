@@ -9,6 +9,7 @@
     "dev:engine": "pnpm --filter @cesar-arb/engine dev",
     "dev:dashboard": "pnpm --filter @cesar-arb/dashboard dev",
     "build": "pnpm -r build",
+    "test": "node --import tsx --test 'packages/**/*.test.ts'",
     "setup": "pnpm --filter @cesar-arb/setup-bot start",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint"

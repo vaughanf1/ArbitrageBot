@@ -24,12 +24,16 @@ export interface UsMarket {
   marketType: string;
   active: boolean;
   closed: boolean;
+  /** ISO settlement/end timestamp supplied by the US gateway, when known. */
+  endDate: string | null;
 }
 
 export interface UsEvent {
   slug: string;
   title: string;
   category: string;
+  /** Event-level settlement/end timestamp supplied by the US gateway. */
+  endDate: string | null;
   markets: UsMarket[];
 }
 
@@ -424,6 +428,7 @@ interface RawEvent {
   slug?: string;
   title?: string;
   category?: string;
+  endDate?: string;
   active?: boolean;
   closed?: boolean;
   markets?: {
@@ -432,6 +437,7 @@ interface RawEvent {
     marketType?: string;
     active?: boolean;
     closed?: boolean;
+    endDate?: string;
   }[];
 }
 
@@ -446,6 +452,7 @@ function parseEvent(r: RawEvent): UsEvent | null {
       marketType: m.marketType ?? '',
       active: m.active ?? true,
       closed: m.closed ?? false,
+      endDate: validIso(m.endDate),
     });
   }
   if (markets.length === 0) return null;
@@ -453,8 +460,14 @@ function parseEvent(r: RawEvent): UsEvent | null {
     slug: r.slug,
     title: r.title ?? r.slug,
     category: r.category ?? '',
+    endDate: validIso(r.endDate),
     markets,
   };
+}
+
+function validIso(value: string | undefined): string | null {
+  if (!value || !Number.isFinite(Date.parse(value))) return null;
+  return value;
 }
 
 function numOr(v: unknown, fallback: number): number {
