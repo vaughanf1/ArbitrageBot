@@ -37,9 +37,15 @@ A real order leaves the engine only when ALL THREE are set in Railway
 | `TRADING_MODE` | `live` | Global paper/live switch |
 | `LIVE_VENUES` | `polymarket-us` | Only listed venues may trade for real |
 | `EXECUTION_DRY_RUN` | `false` | While `true` (default): orders are built and signed but **never sent** |
+| `MAX_SETTLEMENT_DAYS` | `14` | Blocks auto-trades that would lock this small account's capital for longer than 14 days |
 
 Anything else = simulation. If in doubt, set `EXECUTION_DRY_RUN=true` — that is
 always safe.
+
+The live status response exposes these non-secret routing facts under
+`execution`. Do not infer real execution from `mode: "live"` alone:
+`execution.realOrderTransmissionConfigured` must also be `true`, `dryRun` must
+be `false`, and `liveVenues` must contain `polymarket-us`.
 
 ### Fourth gate: no half-real trades (added 2026-07-24)
 

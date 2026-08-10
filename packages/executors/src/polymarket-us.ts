@@ -24,12 +24,16 @@ export interface UsMarket {
   marketType: string;
   active: boolean;
   closed: boolean;
+  /** ISO settlement/end timestamp supplied by the US gateway, when known. */
+  endDate: string | null;
 }
 
 export interface UsEvent {
   slug: string;
   title: string;
   category: string;
+  /** Event-level settlement/end timestamp supplied by the US gateway. */
+  endDate: string | null;
   markets: UsMarket[];
 }
 
@@ -424,6 +428,7 @@ interface RawEvent {
   slug?: string;
   title?: string;
   category?: string;
+  endDate?: string;
   active?: boolean;
   closed?: boolean;
   markets?: {
@@ -432,6 +437,7 @@ interface RawEvent {
     marketType?: string;
     active?: boolean;
     closed?: boolean;
+    endDate?: string;
   }[];
 }
 
@@ -446,6 +452,7 @@ function parseEvent(r: RawEvent): UsEvent | null {
       marketType: m.marketType ?? '',
       active: m.active ?? true,
       closed: m.closed ?? false,
+      endDate: normalizeGatewayIsoDate(m.endDate),
     });
   }
   if (markets.length === 0) return null;
@@ -453,8 +460,39 @@ function parseEvent(r: RawEvent): UsEvent | null {
     slug: r.slug,
     title: r.title ?? r.slug,
     category: r.category ?? '',
+    endDate: normalizeGatewayIsoDate(r.endDate),
     markets,
   };
+}
+
+export function normalizeGatewayIsoDate(value: string | undefined): string | null {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fraction = '', zone] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const hour = Number(hourText);
+  const minute = Number(minuteText);
+  const second = Number(secondText);
+  const millisecond = Number(fraction.padEnd(3, '0'));
+  const calendar = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+  if (
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day ||
+    calendar.getUTCHours() !== hour ||
+    calendar.getUTCMinutes() !== minute ||
+    calendar.getUTCSeconds() !== second
+  ) return null;
+  if (!zone) return null;
+  if (zone !== 'Z') {
+    const [zoneHour, zoneMinute] = zone.slice(1).split(':').map(Number);
+    if ((zoneHour ?? 24) > 23 || (zoneMinute ?? 60) > 59) return null;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 function numOr(v: unknown, fallback: number): number {

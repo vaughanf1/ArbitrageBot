@@ -157,6 +157,13 @@ export interface RiskLimits {
 
 export interface EngineStatus {
   mode: TradingMode;
+  /** Public, credential-free proof of how orders are configured to route. */
+  execution: {
+    dryRun: boolean;
+    liveVenues: Venue[];
+    maxSettlementDays: number;
+    realOrderTransmissionConfigured: boolean;
+  };
   running: boolean;
   killSwitch: boolean;
   startedAt: number | null;

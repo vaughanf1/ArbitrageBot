@@ -289,6 +289,7 @@ export class Engine {
         executor: this.polymarketUs,
         minEdgePct: this.config.limits.minSpreadPct,
         sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
+        maxSettlementDays: this.config.execution.maxSettlementDays,
       }),
     ];
   }
@@ -619,6 +620,15 @@ export class Engine {
   status(): EngineStatus {
     return {
       mode: this.mode,
+      execution: {
+        dryRun: this.config.execution.dryRun,
+        liveVenues: [...this.config.execution.liveVenues],
+        maxSettlementDays: this.config.execution.maxSettlementDays,
+        realOrderTransmissionConfigured:
+          this.mode === 'live' &&
+          !this.config.execution.dryRun &&
+          this.liveRoutedVenues.size > 0,
+      },
       running: this.running,
       killSwitch: this.killSwitch,
       startedAt: this.startedAt,
@@ -720,7 +730,7 @@ export class Engine {
       tradable.sort((a, b) => b.edgePct - a.edgePct);
 
       for (const o of candidates) {
-        this.storage.recordOpportunity(o, o.edgePct >= minEdge);
+        this.storage.recordOpportunity(o, o.edgePct >= minEdge && !o.requiresReview);
       }
 
       this.candidateCount += candidates.length;
