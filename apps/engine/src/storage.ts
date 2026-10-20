@@ -271,6 +271,17 @@ export class Storage {
     }
   }
 
+  saveKillSwitch(active: boolean): void {
+    this.db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('kill_switch', ?, ?)").run(JSON.stringify(active), Date.now());
+  }
+
+  loadKillSwitch(): boolean {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key = 'kill_switch'").get() as { value: string } | undefined;
+    if (row) return row.value !== 'false';
+    const latest = this.db.prepare('SELECT kill_switch FROM daily_state ORDER BY date DESC LIMIT 1').get() as { kill_switch: number } | undefined;
+    return latest?.kill_switch === 1;
+  }
+
   close(): void {
     this.db.close();
   }

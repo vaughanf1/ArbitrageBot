@@ -43,6 +43,10 @@ export class RiskGuard {
 
   /** Decide whether to place an order for this opportunity given current state. */
   evaluate(opp: Opportunity, state: RiskState): RiskDecision {
+    if (!Number.isFinite(opp.sizeUsd) || opp.sizeUsd <= 0 || !Number.isFinite(opp.edgePct) || opp.legs.length === 0 || opp.legs.some((l) => !Number.isFinite(l.qty) || l.qty <= 0 || !Number.isFinite(l.price) || l.price <= 0)) {
+      return { allowed: false, reason: 'invalid opportunity values' };
+    }
+    if (Date.now() >= opp.expiresAt || opp.requiresReview) return { allowed: false, reason: 'stale or review-only opportunity' };
     if (state.killSwitch) {
       return { allowed: false, reason: 'kill-switch active' };
     }

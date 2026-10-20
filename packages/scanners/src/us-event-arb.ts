@@ -147,7 +147,7 @@ export class UsEventArbScanner implements Scanner {
           category: e.category,
           groupType: 'futures',
           markets: fut,
-          exhaustive: e.category === 'sports',
+          exhaustive: false, // Category alone cannot prove a complete outcome set.
           endDate: basketEndDate(e.endDate, fut),
         });
       }
@@ -181,7 +181,7 @@ export class UsEventArbScanner implements Scanner {
     for (const event of picked) {
       // Every outcome needs a fillable ask, else the basket can't be bought.
       const sides = event.markets.map((m) => ({ market: m, book: books.get(m.slug) }));
-      if (sides.some((s) => !s.book)) continue;
+      if (sides.some((s) => !s.book || s.market.closed || !s.market.active)) continue;
 
       const cost = sides.reduce((sum, s) => sum + s.book!.bestAsk, 0);
       if (!isFinite(cost) || cost <= 0 || cost >= 1) continue; // no edge if ≥ $1
@@ -192,11 +192,11 @@ export class UsEventArbScanner implements Scanner {
       // edge must clear fees or the "guaranteed profit" is a guaranteed loss.
       const feePerContractSet = sides.reduce((sum, s) => {
         const p = s.book!.bestAsk;
-        return sum + US_FEE_RATE * p * (1 - p);
+        return sum + (s.market.feeCoefficient ?? US_FEE_RATE) * p * (1 - p);
       }, 0);
       const extraFeePct = (this.feeBps * event.markets.length) / 100;
       const grossEdgePct = ((1 - cost) / cost) * 100;
-      const edgePct = ((1 - cost - feePerContractSet) / cost) * 100 - extraFeePct;
+
 
       // Whole contracts only on the US exchange, and every leg needs the SAME
       // quantity for the payoff math to hold — cap by the shallowest book.
@@ -209,9 +209,10 @@ export class UsEventArbScanner implements Scanner {
       // so the estimate errs against firing marginal trades.
       const estFeeUsd = sides.reduce((sum, s) => {
         const p = s.book!.bestAsk;
-        return sum + Math.ceil(US_FEE_RATE * p * (1 - p) * qty * 100) / 100;
+        return sum + Math.ceil((s.market.feeCoefficient ?? US_FEE_RATE) * p * (1 - p) * qty * 100) / 100;
       }, 0);
       const profitUsd = qty * (1 - cost) - estFeeUsd - (deployedUsd * extraFeePct) / 100;
+      const edgePct = profitUsd / deployedUsd * 100;
       if (profitUsd <= 0) continue; // fee-negative "arb" — never worth firing
 
       const legs: OpportunityLeg[] = sides.map((s) => ({
@@ -220,6 +221,7 @@ export class UsEventArbScanner implements Scanner {
         side: 'buy',
         price: s.book!.bestAsk,
         qty,
+        feeCoefficient: s.market.feeCoefficient ?? US_FEE_RATE,
         note: `buy ${truncate(s.market.question, 40)} @ ${s.book!.bestAsk.toFixed(3)} (depth ${s.book!.askSize})`,
       }));
 
@@ -227,7 +229,7 @@ export class UsEventArbScanner implements Scanner {
       // two-way moneylines are exhaustive by construction; futures only for
       // sports. A non-exhaustive basket under $1 is a directional bet, not an
       // arb — review only.
-      const exhaustive = event.exhaustive;
+      const exhaustive = event.exhaustive && sides.every((s) => s.market.feeCoefficient !== undefined);
       const settlementDays = daysUntilSettlement(event.endDate, now);
       const capitalEfficient =
         settlementDays !== null &&
@@ -255,12 +257,12 @@ export class UsEventArbScanner implements Scanner {
         legs,
         reasoning:
           `Polymarket US multi-outcome arb on "${event.title}". Buying long on all ` +
-          `${event.markets.length} outcomes costs $${cost.toFixed(3)} for a guaranteed $1 payoff ` +
+          `${event.markets.length} outcomes costs $${cost.toFixed(3)} for a $1 payoff if exactly one outcome wins ` +
           `→ ${edgePct.toFixed(2)}% net edge (${grossEdgePct.toFixed(2)}% gross − est. fees $${estFeeUsd.toFixed(2)})` +
           `. Fillable size ${qty} contracts (shallowest book ${maxQtyByBook.toFixed(0)}). ` +
           (exhaustive
             ? 'Sports outcome set — exhaustive by construction, one leg must pay.'
-            : 'NON-sports event: outcome set may not be exhaustive — review before trading.') +
+            : 'Outcome completeness or current fee metadata unverified — review before trading.') +
           settlementReason,
         detectedAt: now,
         expiresAt: now + this.ttlMs,

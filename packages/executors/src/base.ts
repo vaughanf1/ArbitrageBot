@@ -4,6 +4,8 @@ export interface PlaceOrderResult {
   ok: boolean;
   fill?: Fill;
   error?: string;
+  /** Submission may have reached exchange: halt and reconcile, never retry blindly. */
+  uncertain?: boolean;
 }
 
 export interface MarketTicker {

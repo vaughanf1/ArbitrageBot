@@ -15,6 +15,7 @@ function eventEndingIn(days: number | null): UsEvent {
         slug: 'outcome-a',
         question: 'Will A win?',
         marketType: 'moneyline',
+        feeCoefficient: 0.06,
         active: true,
         closed: false,
         endDate,
@@ -23,6 +24,7 @@ function eventEndingIn(days: number | null): UsEvent {
         slug: 'outcome-b',
         question: 'Will B win?',
         marketType: 'moneyline',
+        feeCoefficient: 0.06,
         active: true,
         closed: false,
         endDate,
@@ -140,4 +142,25 @@ test('the latest event or leg settlement date controls eligibility', async () =>
   assert.ok(opportunity);
   assert.equal(opportunity.requiresReview, true);
   assert.match(opportunity.reasoning, /capital locked for 30 days/i);
+});
+
+test('sports futures are not automatically assumed exhaustive', async () => {
+  const event = eventEndingIn(2);
+  event.markets.forEach((m) => { m.marketType = 'futures'; });
+  const [o] = await new UsEventArbScanner({ executor: executorFor(event), minEdgePct: 1, sizeUsd: 10 }).scan();
+  assert.equal(o?.requiresReview, true);
+});
+test('missing current fee metadata requires review', async () => {
+  const event = eventEndingIn(2); event.markets.forEach((m) => { delete m.feeCoefficient; });
+  const [o] = await new UsEventArbScanner({ executor: executorFor(event), minEdgePct: 1, sizeUsd: 10 }).scan();
+  assert.equal(o?.requiresReview, true);
+});
+test('edge percentage includes per-leg commission rounding', async () => {
+  const event = eventEndingIn(2);
+  const [o] = await new UsEventArbScanner({ executor: executorFor(event), minEdgePct: 1, sizeUsd: 10 }).scan();
+  assert.ok(o); assert.equal(o.edgePct, o.estProfitUsd / o.sizeUsd * 100);
+});
+test('inactive sibling never becomes a smaller purportedly exhaustive basket', async () => {
+  const event = eventEndingIn(2); event.markets[0]!.active = false;
+  assert.equal((await new UsEventArbScanner({ executor: executorFor(event), minEdgePct: 1, sizeUsd: 10 }).scan()).length, 0);
 });
