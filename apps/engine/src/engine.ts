@@ -170,6 +170,12 @@ export class Engine {
     }
     this.paperState = freshState(this.config.startingEquityUsd);
 
+    this.killSwitch = this.killSwitch || this.storage.loadKillSwitch();
+    if (this.storage.liveTrades().some((t) => t.reasoning.includes('[ORDER_PENDING]') || (t.status === 'open' && !t.reasoning.includes('Awaiting settlement;')))) {
+      this.killSwitch = true;
+      this.storage.saveKillSwitch(true);
+    }
+    this.state.killSwitch = this.killSwitch;
     this.buildVenues();
     this.buildScanners();
   }
@@ -270,17 +276,11 @@ export class Engine {
    */
   private buildScanners() {
     this.scanners = [
-      // Single-venue YES+NO arb on global Polymarket. Data-only while
-      // LIVE_VENUES is polymarket-us: it reads the live CLOB book and surfaces
-      // real signals on the dashboard, but its legs are not live-routed, so
-      // the gate in tick() skips rather than trades them. Kept registered
-      // because global Polymarket is the natural second venue if Cesar ever
-      // funds one — add 'polymarket' to LIVE_VENUES and it goes live as-is.
-      new PolyIntraMarketScanner({
+      ...(this.config.execution.liveVenues.includes('polymarket') ? [new PolyIntraMarketScanner({
         polymarket: this.polymarket,
         minEdgePct: this.config.limits.minSpreadPct,
         sizeUsd: Math.min(this.config.limits.maxTradeSizeUsd, 100),
-      }),
+      })] : []),
       // Polymarket US (QCEX) multi-outcome event arb — the one strategy that
       // runs on the exchange where Cesar's funds actually are. Market data is
       // public, so it scans in paper mode too; live legs route to the
@@ -342,15 +342,14 @@ export class Engine {
     try {
       available = await this.polymarketUs.buyingPowerUsd();
     } catch (err) {
-      // Balance unreadable — let the order attempt proceed and surface the
-      // exchange's own answer rather than blocking on a transient API fault.
+      // Missing account state must never authorize new exposure.
       this.logger.warn({ err: (err as Error).message }, 'buying power check failed');
-      return { ok: true };
+      return { ok: false, reason: 'buying power unavailable; refusing new exposure' };
     }
     this.buyingPowerUsd = available;
     const cost = opp.legs
       .filter((l) => l.venue === 'polymarket-us' && l.side === 'buy')
-      .reduce((s, l) => s + l.price * l.qty, 0);
+      .reduce((s, l) => s + l.price * l.qty + Math.ceil((l.feeCoefficient ?? 0.06) * l.price * (1 - l.price) * l.qty * 100) / 100, 0);
     if (available < cost) {
       return {
         ok: false,
@@ -430,23 +429,12 @@ export class Engine {
       return;
     }
     const exchangeNet = new Map(exchange.map((p) => [p.marketSlug, p.netPosition]));
-    // Markets settle and vanish from the exchange while their fills stay in
-    // the ledger forever; without this filter every resolved market would be
-    // a permanent false alarm. Ledger-only slugs missing from the active
-    // listing are treated as resolved and skipped.
-    let activeSlugs: Set<string> | null = null;
-    try {
-      const events = await this.polymarketUs.listActiveEvents();
-      activeSlugs = new Set(events.flatMap((e) => e.markets.map((m) => m.slug)));
-    } catch {
-      activeSlugs = null; // listing unavailable — fall back to comparing everything
-    }
     const slugs = new Set([...ledgerNet.keys(), ...exchangeNet.keys()]);
     const mismatches: { marketSlug: string; ledgerNet: number; exchangeNet: number }[] = [];
     for (const slug of slugs) {
       const ledger = ledgerNet.get(slug) ?? 0;
       const actual = exchangeNet.get(slug) ?? 0;
-      if (actual === 0 && activeSlugs && !activeSlugs.has(slug)) continue;
+      // Absence from an active listing is not proof of settlement. Compare all ledger positions.
       if (Math.abs(ledger - actual) > 1e-6) {
         mismatches.push({ marketSlug: slug, ledgerNet: ledger, exchangeNet: actual });
       }
@@ -513,7 +501,7 @@ export class Engine {
       const actual = exchangeNet.get(slug) ?? 0;
       // Settled markets vanish from the listing; their ledger rows are history,
       // not a discrepancy.
-      if (actual === 0 && activeSlugs && !activeSlugs.has(slug)) continue;
+      // Absence from an active listing is not proof of settlement. Compare all ledger positions.
       const correction = actual - ledger;
       if (Math.abs(correction) < 1e-6) continue;
       entries.push({ marketSlug: slug, ledgerNet: ledger, exchangeNet: actual, correction });
@@ -611,6 +599,7 @@ export class Engine {
   }
 
   setKillSwitch(active: boolean): void {
+    this.storage.saveKillSwitch(active);
     this.killSwitch = active;
     this.state.killSwitch = active;
     this.persistState();
@@ -679,6 +668,7 @@ export class Engine {
    * after fixing a bug that produced inflated paper-trade results.
    */
   resetForDemo(): void {
+    if (this.liveRoutedVenues.size || this.storage.liveTrades().length) throw new Error('Cannot erase live trade history');
     this.storage.resetTradeHistory();
     this.recentFires.clear();
     this.state = freshState(this.config.startingEquityUsd);
@@ -800,6 +790,11 @@ export class Engine {
         // bare HTTP 400 and the bot writes a failed trade every dedupe window,
         // for days, with nothing on the dashboard explaining why.
         if (routing === 'live' && !this.config.execution.dryRun) {
+          await this.reconcileUsPositions();
+          if (!this.lastReconciliation?.ok) continue;
+          if (opp.legs.some((l) => this.heldUsSlugs.has(l.symbol.split(':')[0]!))) continue;
+          if (Date.now() >= opp.expiresAt) continue;
+          this.polymarketUs.invalidateBalance();
           const affordable = await this.canAfford(opp);
           if (!affordable.ok) {
             this.logger.warn({ opp: opp.id, reason: affordable.reason }, 'skip: cannot fund this trade');
@@ -830,31 +825,15 @@ export class Engine {
    * the threshold.
    */
   private async refreshMarketCounts(): Promise<void> {
-    const triangleSymbols = new Set<string>();
-    for (const t of DEFAULT_TRIANGLES) {
-      triangleSymbols.add(t.pairs.quoteMid);
-      triangleSymbols.add(t.pairs.quoteOther);
-      triangleSymbols.add(t.pairs.midOther);
+    // Retired venues must not delay a short-lived US opportunity or make a
+    // healthy US engine depend on unrelated exchanges being reachable.
+    try {
+      const events = await this.polymarketUs.listActiveEvents();
+      this.marketCounts['polymarket-us'] = events.reduce((n, e) => n + e.markets.length, 0);
+    } catch (err) {
+      this.marketCounts['polymarket-us'] = 0;
+      this.logger.warn({ error: (err as Error).message }, 'US market listing unavailable');
     }
-    const [bitgetTickers, polyMarkets, kalshiMarkets, usEvents, ...spot] = await Promise.allSettled([
-      this.bitget.tickers([...triangleSymbols]),
-      this.polymarket.listActiveMarkets(),
-      this.kalshi.listActiveMarkets(),
-      this.polymarketUs.listActiveEvents(),
-      ...this.cexSpot.map((e) => e.tickers(CROSS_EXCHANGE_ASSETS)),
-    ]);
-    const next = { ...this.marketCounts };
-    if (bitgetTickers.status === 'fulfilled') next.bitget = bitgetTickers.value.length;
-    if (polyMarkets.status === 'fulfilled') next.polymarket = polyMarkets.value.length;
-    if (kalshiMarkets.status === 'fulfilled') next.kalshi = kalshiMarkets.value.length;
-    if (usEvents.status === 'fulfilled') {
-      next['polymarket-us'] = usEvents.value.reduce((n, e) => n + e.markets.length, 0);
-    }
-    this.cexSpot.forEach((e, i) => {
-      const r = spot[i];
-      if (r && r.status === 'fulfilled') next[e.venue] = r.value.length;
-    });
-    this.marketCounts = next;
   }
 
   private async executeOpportunity(opp: Opportunity, routing: 'live' | 'paper' = 'paper'): Promise<void> {
@@ -864,6 +843,16 @@ export class Engine {
     const mode = this.ledgerModeFor(routing);
     const risk = this.riskStateFor(mode);
     const sizeUsd = this.guard.sizeFor(opp, risk);
+    if (opp.requiresReview || Date.now() >= opp.expiresAt || this.killSwitch || !this.guard.evaluate(opp, risk).allowed) return;
+    if (opp.legs.every((l) => l.venue === 'polymarket-us')) {
+      const quantity = Math.floor(Math.min(...opp.legs.map((l) => l.qty * sizeUsd / opp.sizeUsd)));
+      if (quantity <= 0) return;
+      const legs = opp.legs.map((l) => ({ ...l, qty: quantity }));
+      const cost = legs.reduce((sum, l) => sum + l.price * l.qty, 0);
+      const fees = legs.reduce((sum, l) => sum + Math.ceil((l.feeCoefficient ?? 0.06) * l.price * (1 - l.price) * quantity * 100) / 100, 0);
+      if (!(cost > 0) || (quantity - cost - fees) / cost * 100 < this.config.limits.minSpreadPct) return;
+      opp = { ...opp, legs, sizeUsd: cost };
+    }
     const trade: Trade = {
       id: newTradeId(),
       opportunityId: opp.id,
@@ -882,123 +871,73 @@ export class Engine {
     this.logger.info({ opp: opp.id, edgePct: opp.edgePct, sizeUsd }, 'placing trade');
 
     const fills: Fill[] = [];
-    let scaleFactor = sizeUsd / opp.sizeUsd;
-    if (scaleFactor <= 0 || !isFinite(scaleFactor)) scaleFactor = 1;
-
-    let succeeded = true;
+    const scaleFactor = opp.legs.every((l) => l.venue === 'polymarket-us') ? 1 : sizeUsd / opp.sizeUsd;
+    if (!(scaleFactor > 0) || !Number.isFinite(scaleFactor)) return;
     let failReason = '';
-    // Legs that actually filled, so we can unwind them if a later leg fails.
     const filledLegs: OpportunityLeg[] = [];
     for (const leg of opp.legs) {
+      // A stop received while an earlier order was in flight must block the
+      // next entry. Recovery orders remain allowed to reduce exposure.
+      if (this.killSwitch) { failReason = 'kill switch engaged during execution'; break; }
       const exec = this.executorByVenue.get(leg.venue);
-      if (!exec) {
-        failReason = `no executor for venue ${leg.venue}`;
-        this.logger.error({ venue: leg.venue }, 'no executor for venue');
-        succeeded = false;
+      if (!exec) { failReason = `no executor for ${leg.venue}`; break; }
+      const scaledLeg = { ...leg, qty: leg.qty * scaleFactor };
+      try {
+        const beforeOrder = trade.reasoning;
+        trade.reasoning += ' [ORDER_PENDING]';
+        this.storage.recordTrade(trade);
+        const res = await exec.placeMarketOrder(scaledLeg);
+        if (!res.uncertain) trade.reasoning = beforeOrder;
+        if (res.fill) {
+          fills.push(res.fill);
+          // Never sell the requested quantity when the actual fill was smaller.
+          filledLegs.push({ ...scaledLeg, qty: res.fill.qty, price: res.fill.price });
+          trade.fills = [...fills];
+          this.storage.recordTrade(trade);
+        }
+        if (res.uncertain) this.flagNakedPosition(trade, scaledLeg, res.error ?? 'order outcome unknown');
+        if (!res.ok || !res.fill) { failReason = res.error ?? 'leg did not fill'; break; }
+        if (Math.abs(res.fill.qty - scaledLeg.qty) > 1e-6) {
+          failReason = 'incomplete entry fill — aborting basket';
+          break;
+        }
+      } catch (err) {
+        failReason = `order outcome unknown: ${(err as Error).message}`;
+        this.flagNakedPosition(trade, scaledLeg, failReason);
         break;
       }
-      const scaledLeg: OpportunityLeg = { ...leg, qty: leg.qty * scaleFactor };
-      const res = await exec.placeMarketOrder(scaledLeg);
-      if (!res.ok || !res.fill) {
-        failReason = res.error ?? 'leg failed';
-        this.logger.error({ leg: leg.symbol, error: res.error }, 'leg failed');
-        succeeded = false;
-        break;
-      }
-      fills.push(res.fill);
-      filledLegs.push(scaledLeg);
     }
 
-    if (!succeeded) {
-      // PARTIAL-FILL SAFETY: a multi-leg arb where some legs filled and a later
-      // one didn't leaves a naked, unhedged position. Unwind everything that
-      // did fill before giving up.
-      // Unwind sells go into the SAME array the record is built from. They
-      // used to be pushed onto trade.fills, which the next line then replaced
-      // wholesale — so every unwind sell was silently dropped from the ledger.
-      // That is why the ledger shows 128.87 Philadelphia contracts against the
-      // exchange's 59: 120 real sells were executed and never recorded.
-      if (filledLegs.length > 0) {
-        await this.unwindLegs(filledLegs, trade, fills);
-      }
-      trade.fills = fills;
-      trade.notionalUsd = fills.reduce((s, f) => s + f.price * f.qty, 0);
-      trade.status = 'failed';
-      trade.reasoning = `${trade.reasoning} | ABORTED: ${failReason}`;
-      trade.closedAt = Date.now();
-      this.storage.recordTrade(trade);
-      this.tradedCount += 1;
-      // A failed live attempt is exactly when hidden fills can appear —
-      // re-check the exchange immediately rather than waiting for the timer.
-      if (routing === 'live' && !this.config.execution.dryRun) {
-        this.polymarketUs.invalidateBalance();
-      this.reconcileUsPositions().catch((e) =>
-          this.logger.error({ err: (e as Error).message }, 'post-trade reconciliation failed'),
-        );
-      }
-      return;
-    }
-
-    // PARTIAL-FILL SAFETY, PART 2: every leg returned ok, but an IOC order can
-    // come back with FEWER contracts than we asked for and that still counts as
-    // a fill. A basket is only hedged up to its thinnest leg, so the surplus on
-    // every other leg is a naked directional bet.
-    //
-    // This is what quietly happened on 2026-08-01: a basket filled
-    // 10/10/3.93/0.07 contracts, was recorded as a complete arb, and booked
-    // +$2.71 of profit it had not made. Sell the surplus back down to the
-    // common fill ratio so what remains is genuinely hedged.
-    const hedgedRatio = await this.trimToHedgedRatio(filledLegs, fills, trade);
-
+    if (failReason) await this.unwindLegs(filledLegs, trade, fills);
     trade.fills = fills;
-    trade.notionalUsd = fills.reduce((s, f) => s + (f.side === 'buy' ? 1 : -1) * f.price * f.qty, 0);
-
-    // Trimmed to nothing: the book was too thin to build any hedge, so this
-    // was never an arb. Record it as failed rather than as a closed position.
-    if (hedgedRatio < 0.05) {
-      trade.pnlUsd = computeRealizedPnl(opp, fills);
-      trade.status = 'failed';
-      trade.reasoning = `${trade.reasoning} | ABORTED: legs filled too unevenly to hedge (best hedged ratio ${(hedgedRatio * 100).toFixed(1)}%) — surplus sold back`;
-      trade.closedAt = Date.now();
-      this.storage.recordTrade(trade);
-      this.tradedCount += 1;
-      risk.realizedPnlTodayUsd += trade.pnlUsd;
-      return;
+    const net = new Map<string, number>();
+    for (const f of fills) {
+      const key = `${f.venue}:${f.symbol}`;
+      net.set(key, (net.get(key) ?? 0) + (f.side === 'buy' ? f.qty : -f.qty));
     }
-
-    // For both triangular and prediction-pair the trade closes immediately
-    // in v1: triangular returns to the quote currency in a single tick, and
-    // prediction-pair locks payout = $1 regardless of resolution → we book the
-    // realized edge now and treat resolution as a separate accrual job (v2).
-    const pnl = computeRealizedPnl(opp, fills);
-    trade.pnlUsd = pnl;
-    trade.status = 'closed';
-    trade.closedAt = Date.now();
-
-    risk.exposureTodayUsd += sizeUsd;
-    risk.realizedPnlTodayUsd += pnl;
-
-    // Trip kill switch if daily loss cap hit. A simulated loss halts further
-    // simulation but must not touch the real kill switch — no money was lost.
-    const lossPct = (-risk.realizedPnlTodayUsd / Math.max(risk.startingEquityUsd, 1)) * 100;
-    if (lossPct >= this.config.limits.maxDailyLossPct) {
-      if (mode === 'live') {
-        this.setKillSwitch(true);
-        this.logger.error({ lossPct }, 'daily loss cap hit, kill switch engaged');
-      } else {
-        this.paperLossHalt = true;
-        risk.killSwitch = true;
-        this.logger.warn({ lossPct }, 'simulated daily loss cap hit — paper trading halted for today');
-      }
+    const hasPosition = [...net.values()].some((q) => Math.abs(q) > 1e-6);
+    const cashCost = fills.reduce((sum, f) => sum + (f.side === 'buy' ? 1 : -1) * f.price * f.qty + f.feeUsd, 0);
+    trade.notionalUsd = fills.filter((f) => f.side === 'buy').reduce((sum, f) => sum + f.price * f.qty, 0);
+    // Prediction payout is not cash received. Leave it open until an explicit
+    // settlement/account reconciliation supplies the realised result.
+    const pending = opp.assetClass === 'prediction' && hasPosition;
+    trade.status = failReason ? 'failed' : pending ? 'open' : 'closed';
+    trade.closedAt = pending ? null : Date.now();
+    trade.pnlUsd = pending || this.killSwitch ? null : opp.assetClass === 'prediction' ? -cashCost : computeRealizedPnl(opp, fills);
+    trade.reasoning += failReason ? ` | ABORTED: ${failReason}` : pending ? ' | Awaiting settlement; no realised profit booked.' : '';
+    if (failReason && hasPosition) this.flagNakedPosition(trade, filledLegs[0] ?? opp.legs[0]!, 'residual exposure after unwind');
+    risk.exposureTodayUsd += trade.notionalUsd;
+    risk.realizedPnlTodayUsd += trade.pnlUsd ?? 0;
+    if (-risk.realizedPnlTodayUsd / Math.max(risk.startingEquityUsd, 1) * 100 >= this.config.limits.maxDailyLossPct) {
+      if (mode === 'live') this.setKillSwitch(true);
+      else this.paperLossHalt = true;
     }
-
     this.storage.recordTrade(trade);
+    this.persistState();
     this.tradedCount += 1;
-    this.logger.info({ trade: trade.id, pnl: pnl.toFixed(2) }, 'trade closed');
     if (routing === 'live' && !this.config.execution.dryRun) {
-      this.reconcileUsPositions().catch((e) =>
-        this.logger.error({ err: (e as Error).message }, 'post-trade reconciliation failed'),
-      );
+      this.polymarketUs.invalidateBalance();
+      await this.reconcileUsPositions();
     }
   }
 
@@ -1021,98 +960,31 @@ export class Engine {
       }
       const opposite: OpportunityLeg = { ...leg, side: leg.side === 'buy' ? 'sell' : 'buy' };
       try {
+        const quote = await exec.ticker(leg.symbol);
+        opposite.price = opposite.side === 'sell' ? quote.bid : quote.ask;
+        if (!(opposite.price > 0) || !Number.isFinite(opposite.price)) throw new Error('no executable recovery quote');
+        const beforeOrder = trade.reasoning;
+        trade.reasoning += ' [ORDER_PENDING]';
+        this.storage.recordTrade(trade);
         const res = await exec.placeMarketOrder(opposite);
-        if (!res.ok || !res.fill) {
-          this.flagNakedPosition(trade, leg, res.error ?? 'unwind order rejected');
+        if (!res.uncertain) trade.reasoning = beforeOrder;
+        if (res.fill) into.push(res.fill);
+        trade.fills = [...into];
+        this.storage.recordTrade(trade);
+        if (!res.ok || !res.fill || res.uncertain) {
+          this.flagNakedPosition(trade, leg, res.error ?? 'unwind order rejected or uncertain');
           continue;
         }
-        into.push(res.fill);
+        trade.fills = [...into];
+        this.storage.recordTrade(trade);
+        if (Math.abs(res.fill.qty - leg.qty) > 1e-6) {
+          this.flagNakedPosition(trade, leg, 'unwind filled only part of the exposure');
+        }
         this.logger.warn({ trade: trade.id, leg: leg.symbol, venue: leg.venue }, 'leg unwound');
       } catch (err) {
         this.flagNakedPosition(trade, leg, (err as Error).message);
       }
     }
-  }
-
-  /**
-   * Sell every leg's surplus back down to the common fill ratio.
-   *
-   * An IOC leg can fill short of what we asked for, and the exchange reports
-   * that as a successful (partial) fill. The hedge only holds up to the
-   * thinnest leg, so everything above it is naked directional risk. Trimming
-   * costs the bid/ask spread on the surplus — that is the honest price of an
-   * incomplete basket, and far cheaper than carrying the exposure to
-   * settlement.
-   *
-   * `fills` is index-aligned with `legs` on entry; trim sells are appended, so
-   * computeRealizedPnl (which nets by symbol) values the round trip correctly.
-   * Returns the hedged fraction actually achieved, 0..1.
-   */
-  private async trimToHedgedRatio(
-    legs: OpportunityLeg[],
-    fills: Fill[],
-    trade: Trade,
-  ): Promise<number> {
-    if (legs.length < 2) return 1;
-    const entryFills = fills.slice(0, legs.length);
-    let target = Infinity;
-    for (let i = 0; i < legs.length; i++) {
-      const requested = legs[i]?.qty ?? 0;
-      const filled = entryFills[i]?.qty ?? 0;
-      target = Math.min(target, requested > 0 ? filled / requested : 0);
-    }
-    if (!isFinite(target)) target = 0;
-    // Within a hair of fully filled: nothing worth selling.
-    if (target >= 0.99) return target;
-
-    this.logger.warn(
-      {
-        trade: trade.id,
-        hedgedRatio: Number(target.toFixed(4)),
-        legs: legs.map((l, i) => ({
-          symbol: l.symbol,
-          requested: l.qty,
-          filled: entryFills[i]?.qty ?? 0,
-        })),
-      },
-      'partial fill across legs — selling the surplus back to the hedged ratio',
-    );
-
-    for (let i = 0; i < legs.length; i++) {
-      const leg = legs[i];
-      const fill = entryFills[i];
-      if (!leg || !fill) continue;
-      const keep = leg.qty * target;
-      const surplus = fill.qty - keep;
-      // Contracts are whole units; anything under one is dust the exchange
-      // would reject anyway.
-      if (surplus < 1) continue;
-      const exec = this.executorByVenue.get(leg.venue);
-      if (!exec) {
-        this.flagNakedPosition(trade, { ...leg, qty: surplus }, 'no executor available to trim surplus');
-        continue;
-      }
-      const opposite: OpportunityLeg = {
-        ...leg,
-        side: leg.side === 'buy' ? 'sell' : 'buy',
-        qty: surplus,
-      };
-      try {
-        const res = await exec.placeMarketOrder(opposite);
-        if (!res.ok || !res.fill) {
-          this.flagNakedPosition(trade, opposite, res.error ?? 'trim order rejected');
-          continue;
-        }
-        fills.push(res.fill);
-        this.logger.warn(
-          { trade: trade.id, leg: leg.symbol, surplus, price: res.fill.price },
-          'surplus trimmed',
-        );
-      } catch (err) {
-        this.flagNakedPosition(trade, opposite, (err as Error).message);
-      }
-    }
-    return target;
   }
 
   /** A leg could not be unwound → real exposure. Halt trading, alert loudly. */

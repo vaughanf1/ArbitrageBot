@@ -1,7 +1,7 @@
 import type { DailyReport, StrategyKind, Trade } from '@cesar-arb/shared';
 
 export function buildDailyReport(date: string, trades: Trade[]): DailyReport {
-  const closed = trades.filter((t) => t.status === 'closed');
+  const closed = trades.filter((t) => t.mode === 'live' && t.strategy !== 'adjustment' && t.pnlUsd !== null && (t.status === 'closed' || t.status === 'failed'));
   const totalPnl = closed.reduce((s, t) => s + (t.pnlUsd ?? 0), 0);
   const wins = closed.filter((t) => (t.pnlUsd ?? 0) > 0).length;
   const winRate = closed.length === 0 ? 0 : wins / closed.length;
@@ -48,7 +48,7 @@ export function renderDailyReportHtml(report: DailyReport): string {
         <td>${t.strategy}</td>
         <td>${t.assetClass}</td>
         <td style="text-align:right">$${t.notionalUsd.toFixed(0)}</td>
-        <td style="text-align:right;color:${pnl >= 0 ? '#0A84FF' : '#ff453a'}">${fmt(pnl)}</td>
+        <td style="text-align:right;color:${pnl >= 0 ? '#0A84FF' : '#ff453a'}">${t.pnlUsd === null ? 'Pending' : fmt(pnl)}</td>
         <td>${t.status}</td>
       </tr>`;
     })

@@ -96,6 +96,8 @@ export interface OpportunityLeg {
   qty: number;
   /** Free-form note, e.g. "buy YES on Polymarket". */
   note?: string;
+  /** Venue fee coefficient captured with the market snapshot. */
+  feeCoefficient?: number;
 }
 
 export interface Trade {

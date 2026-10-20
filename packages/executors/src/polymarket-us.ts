@@ -22,6 +22,7 @@ export interface UsMarket {
   slug: string;
   question: string;
   marketType: string;
+  feeCoefficient?: number;
   active: boolean;
   closed: boolean;
   /** ISO settlement/end timestamp supplied by the US gateway, when known. */
@@ -103,7 +104,7 @@ export class PolymarketUsExecutor implements Executor {
     this.secretKey = opts.secretKey;
     this.enableLive = opts.enableLive ?? false;
     this.dryRun = opts.dryRun ?? true;
-    this.slippageBps = opts.slippageBps ?? 100;
+    this.slippageBps = opts.slippageBps ?? 0;
   }
 
   /** Lazily parse the base64 secret into a node crypto Ed25519 key. */
@@ -134,11 +135,12 @@ export class PolymarketUsExecutor implements Executor {
   ): Promise<Response> {
     if (!this.keyId) throw new Error('missing key id');
     const ts = Date.now().toString();
-    const signature = edSign(null, Buffer.from(`${ts}${method}${path}`), this.getSigningKey()).toString(
+    const signature = edSign(null, Buffer.from(`${ts}${method}${path.split('?')[0]}`), this.getSigningKey()).toString(
       'base64',
     );
     return fetch(`${API_BASE}${path}`, {
       method,
+      signal: AbortSignal.timeout(15_000),
       headers: {
         'Content-Type': 'application/json',
         'X-PM-Access-Key': this.keyId,
@@ -164,7 +166,8 @@ export class PolymarketUsExecutor implements Executor {
     if (!res.ok) throw new Error(`polymarket-us balances HTTP ${res.status}`);
     const data = (await res.json()) as { balances?: { buyingPower?: number; currency?: string }[] };
     const usd = (data.balances ?? []).find((b) => b.currency === 'USD');
-    const value = usd?.buyingPower ?? 0;
+    const value = numOr(usd?.buyingPower, NaN);
+    if (!Number.isFinite(value) || value < 0) throw new Error('invalid USD buying power');
     this.balanceCache = { usd: value, cachedAt: Date.now() };
     return value;
   }
@@ -180,17 +183,29 @@ export class PolymarketUsExecutor implements Executor {
    * misread rejections left real fills the bot never recorded.
    */
   async openPositions(): Promise<UsOpenPosition[]> {
-    const res = await this.authedFetch('GET', '/v1/portfolio/positions');
-    if (!res.ok) throw new Error(`polymarket-us positions HTTP ${res.status}`);
-    const data = (await res.json()) as {
-      positions?: Record<string, { netPositionDecimal?: string; netPosition?: string; cost?: { value?: string } }>;
-    };
     const out: UsOpenPosition[] = [];
-    for (const [marketSlug, p] of Object.entries(data.positions ?? {})) {
-      const net = numOr(p.netPositionDecimal ?? p.netPosition, 0);
-      if (net !== 0) out.push({ marketSlug, netPosition: net, costUsd: numOr(p.cost?.value, 0) });
+    let cursor = '';
+    const seen = new Set<string>();
+    for (let page = 0; page < 100; page++) {
+      const path = '/v1/portfolio/positions' + (cursor ? `?cursor=${encodeURIComponent(cursor)}` : '');
+      const res = await this.authedFetch('GET', path);
+      if (!res.ok) throw new Error(`polymarket-us positions HTTP ${res.status}`);
+      const data = (await res.json()) as {
+        positions?: Record<string, { netPositionDecimal?: string; netPosition?: string; cost?: { value?: string } }>;
+        nextCursor?: string; eof?: boolean;
+      };
+      if (!data.positions || typeof data.positions !== 'object') throw new Error('positions response missing positions');
+      for (const [marketSlug, p] of Object.entries(data.positions)) {
+        const net = numOr(p.netPositionDecimal ?? p.netPosition, NaN);
+        if (!Number.isFinite(net)) throw new Error('invalid position quantity');
+        if (net !== 0) out.push({ marketSlug, netPosition: net, costUsd: numOr(p.cost?.value, 0) });
+      }
+      if (data.eof || !data.nextCursor) return out;
+      if (seen.has(data.nextCursor)) throw new Error('positions pagination repeated cursor');
+      cursor = data.nextCursor;
+      seen.add(cursor);
     }
-    return out;
+    throw new Error('positions pagination incomplete');
   }
 
   /** Active multi-market events from the public gateway (cached ~60s). */
@@ -202,7 +217,8 @@ export class PolymarketUsExecutor implements Executor {
     // ~1,450 active events as of 2026-07 — 20 pages covers the lot; the loop
     // still stops early on a short page, and the 60s cache keeps request
     // volume far under the public limit.
-    const maxPages = 20;
+    const maxPages = 100;
+    let complete = false;
     for (let page = 0; page < maxPages; page++) {
       const params = new URLSearchParams({
         active: 'true',
@@ -210,7 +226,7 @@ export class PolymarketUsExecutor implements Executor {
         limit: '100',
         offset: String(page * 100),
       });
-      const res = await fetch(`${GATEWAY_BASE}/v1/events?${params.toString()}`);
+      const res = await fetch(`${GATEWAY_BASE}/v1/events?${params.toString()}`, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) throw new Error(`polymarket-us events HTTP ${res.status}`);
       const data = (await res.json()) as { events?: RawEvent[] };
       const rows = data.events ?? [];
@@ -218,8 +234,10 @@ export class PolymarketUsExecutor implements Executor {
         const parsed = parseEvent(r);
         if (parsed) events.push(parsed);
       }
-      if (rows.length < 100) break;
+      if (rows.length < 100) { complete = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    if (!complete) throw new Error('event listing exceeded pagination limit; refusing incomplete listing');
     this.eventsCache = { events, cachedAt: Date.now() };
     return events;
   }
@@ -234,11 +252,12 @@ export class PolymarketUsExecutor implements Executor {
     const out = new Map<string, UsTopOfBook>();
     const concurrency = 8;
     for (let i = 0; i < slugs.length; i += concurrency) {
+      if (i > 0) await new Promise((resolve) => setTimeout(resolve, 500));
       const batch = slugs.slice(i, i + concurrency);
       const results = await Promise.all(
         batch.map(async (slug) => {
           try {
-            const res = await fetch(`${GATEWAY_BASE}/v1/markets/${encodeURIComponent(slug)}/book`);
+            const res = await fetch(`${GATEWAY_BASE}/v1/markets/${encodeURIComponent(slug)}/book`, { signal: AbortSignal.timeout(10_000) });
             if (!res.ok) return null;
             const data = (await res.json()) as {
               marketData?: {
@@ -320,7 +339,10 @@ export class PolymarketUsExecutor implements Executor {
 
     // Contracts are whole units on the regulated exchange; never round UP
     // into a bigger position than the opportunity sized.
-    const qty = Math.floor(leg.qty);
+    const qty = leg.qty;
+    if (!Number.isFinite(qty) || !Number.isFinite(leg.price) || leg.price <= 0 || leg.price >= 1) {
+      return { ok: false, error: 'polymarket-us: invalid quantity or price' };
+    }
     if (qty <= 0) {
       return { ok: false, error: `polymarket-us: leg qty ${leg.qty} rounds to 0 contracts` };
     }
@@ -328,9 +350,12 @@ export class PolymarketUsExecutor implements Executor {
     // accept (sell). IOC so nothing rests — the arb wants an immediate fill.
     const isSell = leg.side === 'sell';
     const slip = this.slippageBps / 10_000;
-    const limitPrice = isSell
+    const rawLimitPrice = isSell
       ? Math.max(0.001, leg.price * (1 - slip))
       : Math.min(0.999, leg.price * (1 + slip));
+
+    // Round toward the protective side, never above the scanner's buy cap.
+    const limitPrice = (isSell ? Math.ceil(rawLimitPrice * 1000) : Math.floor(rawLimitPrice * 1000)) / 1000;
 
     // DRY RUN: everything above ran for real; stop before signing/submitting.
     if (this.dryRun) {
@@ -356,7 +381,7 @@ export class PolymarketUsExecutor implements Executor {
         type: 'ORDER_TYPE_LIMIT',
         price: { value: limitPrice.toFixed(3), currency: 'USD' },
         quantity: qty,
-        tif: 'TIME_IN_FORCE_IMMEDIATE_OR_CANCEL',
+        tif: isSell ? 'TIME_IN_FORCE_IMMEDIATE_OR_CANCEL' : 'TIME_IN_FORCE_FILL_OR_KILL',
         // Block until the matching engine reports executions so the response
         // tells us the actual fill instead of requiring a follow-up poll.
         synchronousExecution: true,
@@ -379,6 +404,7 @@ export class PolymarketUsExecutor implements Executor {
         }
         return {
           ok: false,
+          uncertain: res.status >= 500 || res.status === 408,
           error: `polymarket-us: order HTTP ${res.status}: ${bodyText.slice(0, 200)}${hint}`,
         };
       }
@@ -387,16 +413,12 @@ export class PolymarketUsExecutor implements Executor {
       // ORD_REJECT_REASON_EXCHANGE_OPTION, so its mere presence means nothing.
       // Only an execution of type REJECTED is an actual rejection; the real
       // reason (price band, buying power, …) arrives in its `text` field.
-      const rejected = (data.executions ?? []).find((e) => e.type === 'EXECUTION_TYPE_REJECTED');
-      if (rejected) {
-        const detail = rejected.text || rejected.orderRejectReason || 'no reason given';
-        return { ok: false, error: `polymarket-us: order rejected: ${detail}` };
-      }
       // Aggregate fills across executions; IOC may fill partially or not at all.
       let filled = 0;
       let spent = 0;
       let feeUsd = 0;
       for (const e of data.executions ?? []) {
+        if (e.type !== 'EXECUTION_TYPE_FILL' && e.type !== 'EXECUTION_TYPE_PARTIAL_FILL') continue;
         const shares = numOr(e.lastShares, 0);
         const px = numOr(e.lastPx?.value, NaN);
         if (shares > 0 && isFinite(px)) {
@@ -405,8 +427,10 @@ export class PolymarketUsExecutor implements Executor {
         }
         feeUsd += numOr(e.commissionNotionalCollected?.value, 0);
       }
+      const terminal = (data.executions ?? []).some((e) =>
+        ['EXECUTION_TYPE_FILL', 'EXECUTION_TYPE_CANCELED', 'EXECUTION_TYPE_REJECTED', 'EXECUTION_TYPE_EXPIRED'].includes(e.type ?? ''));
       if (filled <= 0) {
-        return { ok: false, error: 'polymarket-us: IOC order did not fill (book moved)' };
+        return { ok: false, uncertain: !terminal, error: terminal ? 'polymarket-us: order did not fill' : 'polymarket-us: order outcome unknown; reconcile before resuming' };
       }
       const fill: Fill = {
         venue: this.venue,
@@ -417,9 +441,9 @@ export class PolymarketUsExecutor implements Executor {
         feeUsd,
         filledAt: Date.now(),
       };
-      return { ok: true, fill };
+      return { ok: terminal, fill, uncertain: !terminal, error: terminal ? undefined : 'polymarket-us: nonterminal order response' };
     } catch (err) {
-      return { ok: false, error: `polymarket-us: order failed: ${(err as Error).message}` };
+      return { ok: false, uncertain: true, error: `polymarket-us: order failed: ${(err as Error).message}` };
     }
   }
 }
@@ -435,6 +459,7 @@ interface RawEvent {
     slug?: string;
     question?: string;
     marketType?: string;
+    feeCoefficient?: number;
     active?: boolean;
     closed?: boolean;
     endDate?: string;
@@ -445,11 +470,12 @@ function parseEvent(r: RawEvent): UsEvent | null {
   if (!r.slug || r.closed || r.active === false) return null;
   const markets: UsMarket[] = [];
   for (const m of r.markets ?? []) {
-    if (!m.slug || m.closed || m.active === false) continue;
+    if (!m.slug) continue;
     markets.push({
       slug: m.slug,
       question: m.question ?? m.slug,
       marketType: m.marketType ?? '',
+      feeCoefficient: typeof m.feeCoefficient === 'number' && Number.isFinite(m.feeCoefficient) && m.feeCoefficient >= 0 ? m.feeCoefficient : undefined,
       active: m.active ?? true,
       closed: m.closed ?? false,
       endDate: normalizeGatewayIsoDate(m.endDate),
